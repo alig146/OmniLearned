@@ -326,7 +326,7 @@ def run(
     # set up model
     model = MLPGEN(
         input_dim=num_feat,
-        hidden_size=256,
+        base_dim=256,
         mlp_drop=mlp_drop,
         conditional=conditional,
         cond_dim=num_cond,
