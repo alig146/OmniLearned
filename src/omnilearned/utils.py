@@ -215,6 +215,9 @@ def get_loss(
     clip_loss,
     logs,
     data_pid=None,
+    aux_labels=None,  # Dict: {"decay_mode": labels, "electron": labels, ...}
+    aux_weights=None,  # Dict: {"decay_mode": 0.5, "electron": 0.5, ...}
+    aux_masks=None,  # Dict: {"decay_mode": mask, ...} for conditional tasks
 ):
     loss = 0.0
     if outputs["y_pred"] is not None:
@@ -280,6 +283,35 @@ def get_loss(
         )
         loss = loss + loss_clip
         logs["loss_clip"] += loss_clip.detach()
+
+    # Auxiliary task losses
+    if outputs.get("aux_preds") is not None and aux_labels is not None:
+        aux_weights = aux_weights or {}
+        aux_masks = aux_masks or {}
+        for task_name, aux_pred in outputs["aux_preds"].items():
+            if task_name not in aux_labels or aux_labels[task_name] is None:
+                continue
+
+            task_labels = aux_labels[task_name]
+            task_weight = aux_weights.get(task_name, 0.5)
+            task_mask = aux_masks.get(task_name, None)
+
+            # Apply mask if provided (e.g., decay_mode only for tau samples)
+            if task_mask is not None:
+                if not task_mask.any():
+                    continue
+                aux_pred = aux_pred[task_mask]
+                task_labels = task_labels[task_mask]
+                # Filter out invalid labels (e.g., -1)
+                valid = task_labels >= 0
+                if not valid.any():
+                    continue
+                aux_pred = aux_pred[valid]
+                task_labels = task_labels[valid]
+
+            loss_aux = torch.mean(class_cost(aux_pred, task_labels))
+            logs[f"loss_{task_name}"] = logs.get(f"loss_{task_name}", 0.0) + loss_aux.detach()
+            loss = loss + task_weight * loss_aux
 
     logs["loss"] += loss.detach()
     return loss

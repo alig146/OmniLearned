@@ -32,7 +32,7 @@ def eval_model(
     save_tag="pretrain",
     rank=0,
 ):
-    prediction, cond, labels = test_step(model, test_loader, mode, device)
+    prediction, cond, labels, aux_preds, decay_modes = test_step(model, test_loader, mode, device)
 
     if mode in ["classifier", "regression", "segmentation"]:
         if use_event_loss:
@@ -49,11 +49,24 @@ def eval_model(
             else:
                 prediction = prediction.cpu().numpy()
 
+            # Build save dictionary
+            save_dict = {
+                "prediction": prediction,
+                "pid": labels.cpu().numpy(),
+                "cond": cond.cpu().numpy() if cond is not None else [],
+            }
+            
+            # Add auxiliary task predictions
+            for task_name, task_pred in aux_preds.items():
+                save_dict[f"aux_{task_name}_pred"] = task_pred.softmax(-1).cpu().numpy()
+            
+            # Add decay_mode true labels if available
+            if decay_modes is not None:
+                save_dict["decay_mode"] = decay_modes.cpu().numpy()
+
             np.savez(
                 os.path.join(outdir, f"outputs_{save_tag}_{dataset}_{rank}.npz"),
-                prediction=prediction,
-                pid=labels.cpu().numpy(),
-                cond=cond.cpu().numpy() if cond is not None else [],
+                **save_dict,
             )
     else:
         with h5py.File(
@@ -76,6 +89,8 @@ def test_step(
     preds = []
     labels = []
     conds = []
+    aux_preds_all = {}  # Collect auxiliary predictions
+    decay_modes = []    # Collect true decay mode labels
 
     for ib, batch in enumerate(
         tqdm(dataloader, desc="Iterating", total=len(dataloader))
@@ -86,7 +101,7 @@ def test_step(
         npart = X.shape[1]
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info"]
+            for key in ["cond", "pid", "add_info", "tracks"]
             if key in batch
         }
 
@@ -97,6 +112,13 @@ def test_step(
                     "y_pred" if mode in ["classifier", "regression"] else "z_pred"
                 )
                 preds.append(outputs[output_name])
+                
+                # Collect auxiliary predictions
+                if outputs.get("aux_preds") is not None:
+                    for task_name, task_pred in outputs["aux_preds"].items():
+                        if task_name not in aux_preds_all:
+                            aux_preds_all[task_name] = []
+                        aux_preds_all[task_name].append(task_pred)
 
             elif mode == "generator":
                 assert "cond" in model_kwargs, (
@@ -109,6 +131,11 @@ def test_step(
             labels.append(y)
 
         conds.append(batch["cond"])
+        
+        # Collect true decay mode labels if available
+        if batch.get("decay_mode") is not None:
+            decay_modes.append(batch["decay_mode"].to(device))
+        
         if mode == "generator":
             if batch["pid"] is not None:
                 preds[-1] = torch.cat(
@@ -121,10 +148,21 @@ def test_step(
         preds = pad_array(preds, npart)
     else:
         preds = torch.cat(preds).to(device)
+    
+    # Concatenate auxiliary predictions
+    aux_preds_concat = {}
+    for task_name, task_preds in aux_preds_all.items():
+        aux_preds_concat[task_name] = torch.cat(task_preds).to(device)
+    
+    # Concatenate decay modes if collected
+    decay_modes_concat = torch.cat(decay_modes).to(device) if decay_modes else None
+    
     return (
         preds,
         torch.cat(conds).to(device) if conds[0] is not None else None,
         torch.cat(labels).to(device),
+        aux_preds_concat,
+        decay_modes_concat,
     )
 
 
@@ -154,10 +192,21 @@ def run(
     batch: int = 64,
     num_workers: int = 16,
     clip_inputs: bool = False,
+    aux_tasks_str: str = "",
+    use_tracks: bool = False,
+    track_dim: int = 24,
 ):
     local_rank, rank, size = ddp_setup()
 
     model_params = get_model_parameters(model_size)
+
+    # Parse auxiliary tasks
+    aux_tasks = None
+    if aux_tasks_str:
+        aux_tasks = []
+        for task_def in aux_tasks_str.split(","):
+            name, num_classes_aux = task_def.split(":")
+            aux_tasks.append({"name": name.strip(), "num_classes": int(num_classes_aux)})
 
     # set up model
     model = PET2(
@@ -175,6 +224,9 @@ def run(
         num_gen_classes=num_gen_classes,
         num_coord=num_coord,
         K=K,
+        aux_tasks=aux_tasks,
+        use_tracks=use_tracks,
+        track_dim=track_dim,
         **model_params,
     )
 
@@ -188,7 +240,7 @@ def run(
         print(f"Evaluating on device: {d}, with {size} GPUs")
         print("************")
 
-    # load in train data
+    # load in test data
     test_loader = load_data(
         dataset,
         dataset_type="test",
@@ -204,6 +256,7 @@ def run(
         size=size,
         clip_inputs=clip_inputs,
         mode=mode,
+        use_tracks=use_tracks,
         shuffle=False,
     )
     if rank == 0:

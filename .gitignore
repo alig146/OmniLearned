@@ -1,3 +1,5 @@
 dist/
 src/omnilearned/_version.py
 __pycache__
+samples/
+datasets/

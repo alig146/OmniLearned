@@ -45,13 +45,34 @@ def collate_point_cloud(batch, max_part=5000):
     result = {"X": truncated_X, "y": labels}
 
     # Handle optional fields in a loop to reduce code duplication
-    optional_fields = ["cond", "pid", "add_info", "data_pid", "vertex_pid"]
-    for field in optional_fields:
+    # Fields that are particle-sequence data and should be truncated
+    sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
+    # Fields that are jet-level data and should NOT be truncated
+    jet_level_fields = ["cond", "decay_mode"]
+    # Fields that are separate point clouds (like tracks)
+    point_cloud_fields = ["tracks"]
+    
+    for field in sequence_fields:
         if all(field in item for item in batch):
             stacked = torch.stack([item[field] for item in batch])
             # Truncate if it's sequence-like (i.e., has 2 or more dims)
             if stacked.dim() >= 2 and stacked.shape[1] >= max_particles:
                 stacked = stacked[:, :max_particles].contiguous()
+            result[field] = stacked
+        else:
+            result[field] = None
+    
+    for field in jet_level_fields:
+        if all(field in item for item in batch):
+            result[field] = torch.stack([item[field] for item in batch])
+        else:
+            result[field] = None
+    
+    # Handle tracks as separate point cloud (Option B)
+    for field in point_cloud_fields:
+        if all(field in item for item in batch):
+            stacked = torch.stack([item[field] for item in batch])
+            # Keep full track sequence (truncation based on track validity, not cluster count)
             result[field] = stacked
         else:
             result[field] = None
@@ -118,16 +139,19 @@ class HEPDataset(Dataset):
         clip_inputs=False,
         mode="",
         nevts=-1,
+        use_tracks=False,  # Option B: load tracks as separate point cloud
     ):
         """
         Args:
             file_paths (list): List of file paths.
             use_pid (bool): Flag to select if PID information is used during training
             use_add (bool): Flags to select if additional information besides kinematics are used
+            use_tracks (bool): Flag to load tracks as separate point cloud (Option B)
         """
         self.use_cond = use_cond
         self.use_pid = use_pid
         self.use_add = use_add
+        self.use_tracks = use_tracks
         self.pid_idx = pid_idx
         self.num_add = num_add
         self.label_shift = label_shift
@@ -202,6 +226,15 @@ class HEPDataset(Dataset):
                 f["data_pid"][sample_idx], dtype=data_dtype
             )
 
+        # Auxiliary task labels (if available in data)
+        # decay_mode: 0=1-prong, 1=3-prong, -1=not applicable (for QCD/electron)
+        if "decay_mode" in f:
+            sample["decay_mode"] = torch.tensor(f["decay_mode"][sample_idx], dtype=torch.int64)
+
+        # Load tracks as separate point cloud (Option B)
+        if self.use_tracks and "tracks" in f:
+            sample["tracks"] = torch.tensor(f["tracks"][sample_idx], dtype=torch.float32)
+
         return sample
 
     def __del__(self):
@@ -231,6 +264,7 @@ def load_data(
     mode="",
     shuffle=True,
     nevts=-1,
+    use_tracks=False,  # Option B: load tracks as separate point cloud
 ):
     supported_datasets = [
         "top",
@@ -263,6 +297,7 @@ def load_data(
         "aspen_bsm_ad_sb",
         "aspen_bsm_ad_sr",
         "aspen_bsm_ad_sr_hl",
+        "tau",  # Custom tau dataset
     ]
     if dataset_name not in supported_datasets:
         raise ValueError(
@@ -347,6 +382,7 @@ def load_data(
         clip_inputs=clip_inputs,
         mode=mode,
         nevts=nevts,
+        use_tracks=use_tracks,
     )
 
     loader = DataLoader(

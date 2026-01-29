@@ -81,7 +81,7 @@ def train_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info"]
+            for key in ["cond", "pid", "add_info", "tracks"]
             if key in batch
         }
 
@@ -89,6 +89,19 @@ def train_step(
             data_pid = batch["data_pid"].to(device)
         else:
             data_pid = None
+
+        # Auxiliary task labels (pid: 0=QCD, 1=tau, 2=electron)
+        aux_labels = {}
+        aux_masks = {}
+        if batch.get("decay_mode") is not None:
+            aux_labels["decay_mode"] = batch["decay_mode"].to(device)
+            aux_masks["decay_mode"] = (y == 1)  # Only taus
+        
+        # Electron vs QCD: derived from pid
+        aux_tasks = (model.module.aux_tasks if hasattr(model, 'module') else model.aux_tasks) or []
+        if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
+            aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
+            aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -106,6 +119,8 @@ def train_step(
                 clip_loss,
                 logs,
                 data_pid=data_pid,
+                aux_labels=aux_labels if aux_labels else None,
+                aux_masks=aux_masks if aux_masks else None,
             )
 
         if use_amp and gscaler is not None:
@@ -166,7 +181,7 @@ def val_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info"]
+            for key in ["cond", "pid", "add_info", "tracks"]
             if key in batch
         }
 
@@ -174,6 +189,19 @@ def val_step(
             data_pid = batch["data_pid"].to(device)
         else:
             data_pid = None
+
+        # Auxiliary task labels (pid: 0=QCD, 1=tau, 2=electron)
+        aux_labels = {}
+        aux_masks = {}
+        if batch.get("decay_mode") is not None:
+            aux_labels["decay_mode"] = batch["decay_mode"].to(device)
+            aux_masks["decay_mode"] = (y == 1)  # Only taus
+        
+        # Electron vs QCD: derived from pid
+        aux_tasks = (model.module.aux_tasks if hasattr(model, 'module') else model.aux_tasks) or []
+        if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
+            aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
+            aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
@@ -188,6 +216,8 @@ def val_step(
                 clip_loss,
                 logs,
                 data_pid=data_pid,
+                aux_labels=aux_labels if aux_labels else None,
+                aux_masks=aux_masks if aux_masks else None,
             )
 
     if dist.is_initialized():
@@ -335,7 +365,7 @@ def run(
     save_tag: str = "",
     pretrain_tag: str = "pretrain",
     dataset: str = "top",
-    path: str = "/pscratch/sd/v/vmikuni/datasets",
+    path: str = "/pscratch/sd/a/agarabag/OmniLearned/datasets",
     wandb=False,
     fine_tune: bool = False,
     resuming: bool = False,
@@ -377,8 +407,22 @@ def run(
     feature_drop: float = 0.0,
     num_workers: int = 16,
     clip_inputs: bool = False,
+    # Auxiliary tasks: comma-separated "name:num_classes" pairs
+    # e.g., "decay_mode:2,electron_label:2"
+    aux_tasks_str: str = "",
+    # Option B: Tracks as separate tokens
+    use_tracks: bool = False,
+    track_dim: int = 24,
 ):
     local_rank, rank, size = ddp_setup()
+
+    # Parse auxiliary tasks
+    aux_tasks = None
+    if aux_tasks_str:
+        aux_tasks = []
+        for task_def in aux_tasks_str.split(","):
+            name, num_cls = task_def.strip().split(":")
+            aux_tasks.append({"name": name, "num_classes": int(num_cls)})
 
     model_params = get_model_parameters(model_size)
     # set up model
@@ -401,6 +445,9 @@ def run(
         feature_drop=feature_drop,
         num_coord=num_coord,
         K=K,
+        aux_tasks=aux_tasks,
+        use_tracks=use_tracks,
+        track_dim=track_dim,
         **model_params,
     )
 
@@ -431,6 +478,7 @@ def run(
         clip_inputs=clip_inputs,
         mode=mode,
         nevts=nevts,
+        use_tracks=use_tracks,
     )
     if rank == 0:
         print("**** Setup ****")
@@ -452,6 +500,7 @@ def run(
         size=size,
         clip_inputs=clip_inputs,
         mode=mode,
+        use_tracks=use_tracks,
     )
 
     param_groups = get_param_groups(
@@ -500,6 +549,7 @@ def run(
 
     model = DDP(
         model,
+        find_unused_parameters=True,  # Required for auxiliary tasks with conditional masking
         **kwarg,
     )
 

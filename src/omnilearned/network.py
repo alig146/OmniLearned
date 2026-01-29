@@ -45,9 +45,13 @@ class PET2(nn.Module):
         K=15,
         skip=False,
         num_coord=3,
+        aux_tasks=None,  # Auxiliary tasks: [{"name": "decay_mode", "num_classes": 2}, ...]
+        use_tracks=False,  # Option B: tracks as separate tokens
+        track_dim=24,      # Number of track features
     ):
         super().__init__()
         self.mode = mode
+        self.use_tracks = use_tracks
         if self.mode not in [
             "classifier",
             "generator",
@@ -84,6 +88,8 @@ class PET2(nn.Module):
             use_time=self.mode in ["generator", "pretrain"],
             skip=skip,
             num_coord=num_coord,
+            use_tracks=use_tracks,
+            track_dim=track_dim,
         )
 
         self.num_add = self.body.num_add
@@ -91,6 +97,7 @@ class PET2(nn.Module):
         self.classifier = None
         self.generator = None
 
+        self.aux_tasks = aux_tasks or []
         use_classifier = self.mode in ["classifier", "ftag", "regression", "pretrain"]
         use_generator = self.mode in ["generator", "segmentation", "ftag", "pretrain"]
         if use_classifier:
@@ -105,6 +112,7 @@ class PET2(nn.Module):
                 attn_drop=attn_drop,
                 num_tokens=num_tokens,
                 num_classes=num_classes,
+                aux_tasks=aux_tasks,
             )
 
         if use_generator:
@@ -141,7 +149,7 @@ class PET2(nn.Module):
         # Specify parameters that should not be decayed
         return {"norm", "token"}
 
-    def forward(self, x, y, cond=None, pid=None, add_info=None):
+    def forward(self, x, y, cond=None, pid=None, add_info=None, tracks=None):
         y_pred, y_perturb, z_pred, v, v_weight, x_body, z_body = (
             None,
             None,
@@ -157,7 +165,7 @@ class PET2(nn.Module):
 
         if self.mode in ["generator", "pretrain"]:
             z, v, v_weight = perturb(x, time)
-            z_body = self.body(z, cond, pid, add_info, time)
+            z_body = self.body(z, cond, pid, add_info, time, tracks=tracks)
             z_pred = self.generator(z_body, y)
 
         if self.mode in [
@@ -167,7 +175,7 @@ class PET2(nn.Module):
             "pretrain",
             "ftag",
         ]:
-            x_body = self.body(x, cond, pid, add_info, torch.zeros_like(time))
+            x_body = self.body(x, cond, pid, add_info, torch.zeros_like(time), tracks=tracks)
 
             if self.mode in ["classifier", "pretrain", "regression", "ftag"]:
                 y_pred = self.classifier(x_body)
@@ -175,6 +183,12 @@ class PET2(nn.Module):
                 y_perturb = self.classifier(z_body)
             if self.mode == "ftag" or self.mode == "segmentation":
                 z_pred = self.generator(x_body, y)
+
+        # Handle aux_tasks output format
+        aux_preds = None
+        if self.aux_tasks and isinstance(y_pred, dict):
+            aux_preds = {k: v for k, v in y_pred.items() if k != "primary"}
+            y_pred = y_pred["primary"]
 
         return {
             "y_pred": y_pred,
@@ -185,6 +199,7 @@ class PET2(nn.Module):
             "x_body": x_body,
             "z_body": z_body,
             "alpha": alpha**2,
+            "aux_preds": aux_preds,
         }
 
 
@@ -201,9 +216,12 @@ class PET_classifier(nn.Module):
         attn_drop=0.1,
         num_tokens=4,
         num_classes=2,
+        # Auxiliary task configurations
+        aux_tasks=None,  # List of dicts: [{"name": "decay_mode", "num_classes": 2}, ...]
     ):
         super().__init__()
         self.num_tokens = num_tokens
+        self.aux_tasks = aux_tasks or []
 
         self.in_blocks = nn.ModuleList(
             [
@@ -232,6 +250,13 @@ class PET_classifier(nn.Module):
 
         self.out = nn.Linear(self.num_tokens * base_dim, num_classes)
 
+        # Auxiliary task heads
+        self.aux_heads = nn.ModuleDict()
+        for task in self.aux_tasks:
+            self.aux_heads[task["name"]] = nn.Linear(
+                self.num_tokens * base_dim, task["num_classes"]
+            )
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -248,8 +273,20 @@ class PET_classifier(nn.Module):
         for ib, blk in enumerate(self.in_blocks):
             x = blk(x, mask=mask)
 
-        x = self.fc(x[:, : self.num_tokens].reshape(B, -1))
-        return self.out(x)
+        features = self.fc(x[:, : self.num_tokens].reshape(B, -1))
+
+        # Primary output
+        y_pred = self.out(features)
+
+        # If no aux tasks, return just primary (backward compatible)
+        if not self.aux_tasks:
+            return y_pred
+
+        # Return dict with all predictions
+        outputs = {"primary": y_pred}
+        for task in self.aux_tasks:
+            outputs[task["name"]] = self.aux_heads[task["name"]](features)
+        return outputs
 
 
 class PET_generator(nn.Module):
@@ -372,6 +409,8 @@ class PET_body(nn.Module):
         use_time=False,
         skip=False,
         num_coord=3,
+        use_tracks=False,  # Option B: tracks as separate tokens
+        track_dim=24,      # Number of track features
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -382,6 +421,8 @@ class PET_body(nn.Module):
         self.add_info = add_info
         self.skip = skip
         self.num_coord = num_coord
+        self.use_tracks = use_tracks
+        self.track_dim = track_dim
         self.embed = InputBlock(
             in_features=input_dim,
             hidden_features=int(mlp_ratio * base_dim),
@@ -427,6 +468,21 @@ class PET_body(nn.Module):
                 )
             )
             self.num_add += 1
+
+        # Option B: Track embedding - treats tracks as separate tokens
+        if self.use_tracks:
+            self.track_embed = nn.Sequential(
+                MLP(
+                    in_features=track_dim,
+                    hidden_features=int(mlp_ratio * base_dim),
+                    out_features=base_dim,
+                    norm_layer=norm_layer,
+                    act_layer=act_layer,
+                ),
+                NoScaleDropout(feature_drop),
+            )
+            # Type embedding: 0 = cluster, 1 = track
+            self.type_embed = nn.Embedding(2, base_dim)
 
         if self.use_time:
             # Time embedding module for diffusion timesteps
@@ -536,7 +592,7 @@ class PET_body(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x, cond=None, pid=None, add_info=None, time=None):
+    def forward(self, x, cond=None, pid=None, add_info=None, time=None, tracks=None):
         B = x.shape[0]
         mask = x[:, :, 2:3] != 0
         token = self.token.expand(B, -1, -1)
@@ -563,6 +619,29 @@ class PET_body(nn.Module):
         if add_info is not None and self.add_info:
             x = x + self.add_embed(add_info) * mask
 
+        # Option B: Add tracks as separate tokens
+        if tracks is not None and self.use_tracks:
+            # Track mask based on feature 2 (log pT)
+            track_mask = tracks[:, :, 2:3] != 0
+            
+            # Embed tracks
+            track_embed = self.track_embed(tracks) * track_mask
+            
+            # Add type embeddings to distinguish clusters from tracks
+            n_clusters = x.shape[1]
+            n_tracks = tracks.shape[1]
+            
+            # Type 0 for clusters, Type 1 for tracks
+            cluster_type = torch.zeros(B, n_clusters, dtype=torch.long, device=x.device)
+            track_type = torch.ones(B, n_tracks, dtype=torch.long, device=x.device)
+            
+            x = x + self.type_embed(cluster_type) * mask
+            track_embed = track_embed + self.type_embed(track_type) * track_mask
+            
+            # Concatenate: [clusters, tracks]
+            x = torch.cat([x, track_embed], dim=1)
+            mask = torch.cat([mask, track_mask], dim=1)
+
         if cond is not None and self.conditional:
             # Conditional information: jet level quantities for example
             x = torch.cat([self.cond_embed(cond).unsqueeze(1), x], 1)
@@ -580,7 +659,9 @@ class PET_body(nn.Module):
         attn_mask = ~(attn_mask.bool()).repeat_interleave(self.num_heads, dim=0)
         attn_mask = attn_mask.float() * -1e9
 
-        if self.use_int:
+        # Note: interaction matrix only applies to clusters, not tracks
+        # So we don't use x_int for the combined sequence when tracks are used
+        if self.use_int and not self.use_tracks:
             # Add the information of the interaction matrix
             attn_mask[
                 :, self.num_tokens + self.num_add :, self.num_tokens + self.num_add :
