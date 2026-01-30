@@ -227,7 +227,7 @@ class HEPDataset(Dataset):
             )
 
         # Auxiliary task labels (if available in data)
-        # decay_mode: 0=1-prong, 1=3-prong, -1=not applicable (for QCD/electron)
+        # decay_mode: 0 : 1p0n, 1 : 1pXn, 2 : 3p0n, 3 : 3pXn, -1 : not applicable (for QCD/electron)
         if "decay_mode" in f:
             sample["decay_mode"] = torch.tensor(f["decay_mode"][sample_idx], dtype=torch.int64)
 

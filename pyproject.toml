@@ -32,6 +32,8 @@ dependencies = [
     "typer>=0.15.2",
     "tqdm>=4.67.1",
     "uproot>=5.7.0",
+    "matplotlib>=3.10.8",
+    "ipykernel>=7.1.0"
 ]
 
 [project.optional-dependencies]
