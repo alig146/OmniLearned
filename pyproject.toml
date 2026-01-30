@@ -31,7 +31,7 @@ dependencies = [
     "diffusers>=0.32.2",
     "typer>=0.15.2",
     "tqdm>=4.67.1",
-
+    "uproot>=5.7.0",
 ]
 
 [project.optional-dependencies]

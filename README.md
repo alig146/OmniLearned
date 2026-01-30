@@ -35,6 +35,12 @@ This repository contains the software package necessary to reproduce all the res
 pip install omnilearned
 ```
 
+Or optionally, if the current package is out-of-date:
+
+```bash
+pip install -e .
+```
+
 
 ## Data
 
