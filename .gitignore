@@ -1,8 +1,13 @@
 dist/
 src/omnilearned/_version.py
 __pycache__
+.venv/
+
 samples/
 datasets/
 
-.venv/
+# Data files and plots
 *.png
+*.npz
+*.pt
+*.json
