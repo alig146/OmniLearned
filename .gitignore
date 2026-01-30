@@ -5,3 +5,4 @@ samples/
 datasets/
 
 .venv/
+*.png

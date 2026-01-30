@@ -55,11 +55,13 @@ TRACK_FEATURE_NAMES = [
 
 CLASS_NAMES = {0: "QCD", 1: "Tau", 2: "Electron"}
 CLASS_COLORS = {0: "#e41a1c", 1: "#377eb8", 2: "#4daf4a"}
-DECAY_MODE_NAMES = {0: "1-prong", 1: "3-prong"}
-DECAY_MODE_COLORS = {0: "#ff7f00", 1: "#984ea3"}
+PRONGNESS_NAMES = {0: "1-prong", 1: "3-prong"}
+PRONGNESS_COLORS = {0: "#ff7f00", 1: "#984ea3"}
+DECAY_MODE_NAMES = {0: "1p0n", 1: "1p1n", 2: "1pXn", 3: "3p0n", 4: "3pXn"}
+DECAY_MODE_COLORS = {0: "#e41a1c", 1: "#377eb8", 2: "#4daf4a", 3: "#984ea3", 4: "#ff7f00"}
 
 MAX_TRACKS = 20
-NUM_TRACK_FEATURES = 24
+NUM_TRACK_FEATURES = len(TRACK_FEATURE_NAMES)
 
 
 def load_data(filepath):
@@ -68,13 +70,14 @@ def load_data(filepath):
     with h5py.File(filepath, "r") as f:
         data = {
             "clusters": f["data"][:],
-            "global": f["global"][:],
+            "tracks": f["tracks"][:],
             "pid": f["pid"][:],
+            "prongness": f["prongness"][:],
             "decay_mode": f["decay_mode"][:],
         }
     print(f"  Loaded {len(data['pid'])} jets")
     print(f"  Clusters shape: {data['clusters'].shape}")
-    print(f"  Global shape: {data['global'].shape}")
+    print(f"  Tracks shape: {data['tracks'].shape}")
     return data
 
 
@@ -86,19 +89,18 @@ def get_valid_cluster_values(clusters, feature_idx):
     return values
 
 
-def get_track_features(global_data, track_idx, feature_idx):
+def get_track_features(tracks, track_idx, feature_idx):
     """Extract a specific track feature from flattened global array."""
-    # global is [N_jets, MAX_TRACKS * NUM_TRACK_FEATURES]
-    # Reshape to [N_jets, MAX_TRACKS, NUM_TRACK_FEATURES]
-    n_jets = global_data.shape[0]
-    reshaped = global_data.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
+    # tracks is [N_jets, MAX_TRACKS, NUM_TRACK_FEATURES]
+    n_jets = tracks.shape[0]
+    reshaped = tracks.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
     return reshaped[:, track_idx, feature_idx]
 
 
-def get_all_track_values(global_data, feature_idx):
+def get_all_track_values(tracks, feature_idx):
     """Get all non-zero track values for a feature across all tracks."""
-    n_jets = global_data.shape[0]
-    reshaped = global_data.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
+    n_jets = tracks.shape[0]
+    reshaped = tracks.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
     # Use feature 2 (log trackPt) to identify valid tracks
     valid_mask = reshaped[:, :, 2] != 0
     values = reshaped[:, :, feature_idx][valid_mask]
@@ -155,7 +157,7 @@ def plot_track_features(data, output_dir):
     """Plot all track feature distributions."""
     print("\nPlotting track features...")
     
-    global_data = data["global"]
+    tracks = data["tracks"]
     pid = data["pid"]
     
     n_features = NUM_TRACK_FEATURES
@@ -174,7 +176,7 @@ def plot_track_features(data, output_dir):
             mask = pid == class_id
             if mask.sum() == 0:
                 continue
-            values = get_all_track_values(global_data[mask], i)
+            values = get_all_track_values(tracks[mask], i)
             if len(values) > 0:
                 # Remove extreme outliers
                 p1, p99 = np.percentile(values, [1, 99])
@@ -198,27 +200,27 @@ def plot_track_features(data, output_dir):
     print(f"  Saved track_features_by_class.png")
 
 
-def plot_decay_mode_features(data, output_dir):
-    """Plot feature distributions by decay mode (for tau jets only)."""
-    print("\nPlotting features by decay mode (tau jets only)...")
+def plot_prongness_features(data, output_dir):
+    """Plot feature distributions by prongness (for tau jets only)."""
+    print("\nPlotting features by prongness (tau jets only)...")
     
     clusters = data["clusters"]
-    global_data = data["global"]
+    tracks = data["tracks"]
     pid = data["pid"]
-    decay_mode = data["decay_mode"]
+    prongness = data["prongness"]
     
-    # Select tau jets with valid decay mode
-    tau_mask = (pid == 1) & (decay_mode >= 0)
+    # Select tau jets with valid prongness
+    tau_mask = (pid == 1) & (prongness >= 0)
     
     if tau_mask.sum() == 0:
-        print("  No tau jets with valid decay mode found, skipping...")
+        print("  No tau jets with valid prongness found, skipping...")
         return
     
     tau_clusters = clusters[tau_mask]
-    tau_global = global_data[tau_mask]
-    tau_decay = decay_mode[tau_mask]
+    tau_tracks = tracks[tau_mask]
+    tau_prongness = prongness[tau_mask]
     
-    # Plot cluster features by decay mode
+    # Plot cluster features by prongness
     n_features = clusters.shape[2]
     n_cols = 3
     n_rows = (n_features + n_cols - 1) // n_cols
@@ -230,7 +232,103 @@ def plot_decay_mode_features(data, output_dir):
         ax = axes[i]
         feature_name = CLUSTER_FEATURE_NAMES[i] if i < len(CLUSTER_FEATURE_NAMES) else f"Feature {i}"
         
-        for dm in [0, 1]:
+        for prong in [0, 1]:
+            mask = tau_prongness == prong
+            if mask.sum() == 0:
+                continue
+            values = get_valid_cluster_values(tau_clusters[mask], i)
+            if len(values) > 0:
+                p1, p99 = np.percentile(values, [1, 99])
+                values_clipped = values[(values >= p1) & (values <= p99)]
+                ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
+                       label=PRONGNESS_NAMES[prong], color=PRONGNESS_COLORS[prong])
+        
+        ax.set_xlabel(feature_name)
+        ax.set_ylabel("Density")
+        ax.legend()
+        ax.set_title(f"Cluster: {feature_name}")
+    
+    for i in range(n_features, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.suptitle("Tau Cluster Features by Prongness", fontsize=14, y=1.02)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "cluster_features_by_prongness.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved cluster_features_by_prongness.png")
+    
+    # Plot track features by prongness
+    n_features = NUM_TRACK_FEATURES
+    n_cols = 4
+    n_rows = (n_features + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
+    axes = axes.flatten()
+    
+    for i in range(n_features):
+        ax = axes[i]
+        feature_name = TRACK_FEATURE_NAMES[i] if i < len(TRACK_FEATURE_NAMES) else f"Feature {i}"
+        
+        for prong in [0, 1]:
+            mask = tau_prongness == prong
+            if mask.sum() == 0:
+                continue
+            values = get_all_track_values(tau_tracks[mask], i)
+            if len(values) > 0:
+                p1, p99 = np.percentile(values, [1, 99])
+                values_clipped = values[(values >= p1) & (values <= p99)]
+                if len(values_clipped) > 0:
+                    ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
+                           label=PRONGNESS_NAMES[prong], color=PRONGNESS_COLORS[prong])
+        
+        ax.set_xlabel(feature_name)
+        ax.set_ylabel("Density")
+        ax.legend(fontsize=8)
+        ax.set_title(f"Track: {feature_name}", fontsize=10)
+    
+    for i in range(n_features, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.suptitle("Tau Track Features by Prongness", fontsize=14, y=1.02)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "track_features_by_prongness.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved track_features_by_prongness.png")
+
+
+def plot_decay_mode_features(data, output_dir):
+    """Plot feature distributions by detailed decay mode (for tau jets only)."""
+    print("\nPlotting features by detailed decay mode (tau jets only)...")
+    
+    clusters = data["clusters"]
+    tracks = data["tracks"]
+    pid = data["pid"]
+    decay_mode = data["decay_mode"]
+    
+    # Select tau jets with valid decay mode
+    tau_mask = (pid == 1) & (decay_mode >= 0)
+    
+    if tau_mask.sum() == 0:
+        print("  No tau jets with valid decay mode found, skipping...")
+        return
+    
+    tau_clusters = clusters[tau_mask]
+    tau_tracks = tracks[tau_mask]
+    tau_decay = decay_mode[tau_mask]
+    
+    # Plot cluster features by detailed decay mode
+    n_features = clusters.shape[2]
+    n_cols = 3
+    n_rows = (n_features + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+    axes = axes.flatten()
+    
+    for i in range(n_features):
+        ax = axes[i]
+        feature_name = CLUSTER_FEATURE_NAMES[i] if i < len(CLUSTER_FEATURE_NAMES) else f"Feature {i}"
+        
+        for dm in range(5):  # 0-4
             mask = tau_decay == dm
             if mask.sum() == 0:
                 continue
@@ -243,19 +341,19 @@ def plot_decay_mode_features(data, output_dir):
         
         ax.set_xlabel(feature_name)
         ax.set_ylabel("Density")
-        ax.legend()
+        ax.legend(fontsize=8)
         ax.set_title(f"Cluster: {feature_name}")
     
     for i in range(n_features, len(axes)):
         axes[i].set_visible(False)
     
-    plt.suptitle("Tau Cluster Features by Decay Mode", fontsize=14, y=1.02)
+    plt.suptitle("Tau Cluster Features by Detailed Decay Mode", fontsize=14, y=1.02)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "cluster_features_by_decay_mode.png"), dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved cluster_features_by_decay_mode.png")
     
-    # Plot track features by decay mode
+    # Plot track features by detailed decay mode
     n_features = NUM_TRACK_FEATURES
     n_cols = 4
     n_rows = (n_features + n_cols - 1) // n_cols
@@ -267,11 +365,11 @@ def plot_decay_mode_features(data, output_dir):
         ax = axes[i]
         feature_name = TRACK_FEATURE_NAMES[i] if i < len(TRACK_FEATURE_NAMES) else f"Feature {i}"
         
-        for dm in [0, 1]:
+        for dm in range(5):  # 0-4
             mask = tau_decay == dm
             if mask.sum() == 0:
                 continue
-            values = get_all_track_values(tau_global[mask], i)
+            values = get_all_track_values(tau_tracks[mask], i)
             if len(values) > 0:
                 p1, p99 = np.percentile(values, [1, 99])
                 values_clipped = values[(values >= p1) & (values <= p99)]
@@ -281,13 +379,13 @@ def plot_decay_mode_features(data, output_dir):
         
         ax.set_xlabel(feature_name)
         ax.set_ylabel("Density")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=6)
         ax.set_title(f"Track: {feature_name}", fontsize=10)
     
     for i in range(n_features, len(axes)):
         axes[i].set_visible(False)
     
-    plt.suptitle("Tau Track Features by Decay Mode", fontsize=14, y=1.02)
+    plt.suptitle("Tau Track Features by Detailed Decay Mode", fontsize=14, y=1.02)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "track_features_by_decay_mode.png"), dpi=150, bbox_inches="tight")
     plt.close()
@@ -299,13 +397,14 @@ def plot_summary_stats(data, output_dir):
     print("\nPlotting summary statistics...")
     
     clusters = data["clusters"]
-    global_data = data["global"]
+    tracks = data["tracks"]
     pid = data["pid"]
+    prongness = data["prongness"]
     decay_mode = data["decay_mode"]
     
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     
-    # 1. Class distribution
+    # Class distribution
     ax = axes[0, 0]
     class_counts = [np.sum(pid == i) for i in range(3)]
     bars = ax.bar(list(CLASS_NAMES.values()), class_counts, color=list(CLASS_COLORS.values()))
@@ -315,21 +414,21 @@ def plot_summary_stats(data, output_dir):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{count}',
                 ha='center', va='bottom', fontsize=10)
     
-    # 2. Decay mode distribution (tau only)
+    # Decay mode distribution (tau only)
     ax = axes[0, 1]
     tau_mask = pid == 1
     dm_tau = decay_mode[tau_mask]
-    dm_counts = [np.sum(dm_tau == i) for i in range(2)]
+    dm_counts = [np.sum(dm_tau == i) for i in range(5)]
     na_count = np.sum(dm_tau == -1)
-    bars = ax.bar(["1-prong", "3-prong", "N/A"], dm_counts + [na_count], 
-                  color=[DECAY_MODE_COLORS[0], DECAY_MODE_COLORS[1], "gray"])
+    bars = ax.bar(list(DECAY_MODE_NAMES.values()) + ["N/A"], dm_counts + [na_count],
+                  color=list(DECAY_MODE_COLORS.values()) + ["gray"])
     ax.set_ylabel("Number of Tau Jets")
     ax.set_title("Tau Decay Mode Distribution")
     for bar, count in zip(bars, dm_counts + [na_count]):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{count}',
                 ha='center', va='bottom', fontsize=10)
     
-    # 3. Number of valid clusters per jet
+    # Number of valid clusters per jet
     ax = axes[1, 0]
     n_clusters = (clusters[:, :, 2] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
@@ -341,12 +440,19 @@ def plot_summary_stats(data, output_dir):
     ax.set_title("Clusters per Jet")
     ax.legend()
     
-    # 4. Number of valid tracks per jet
+    # Number of valid tracks per jet
     ax = axes[1, 1]
-    reshaped = global_data.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
+    print(f"tracks shape: {tracks.shape}")  # Debug print
+    reshaped = tracks.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
+    print(f"reshaped tracks shape: {reshaped.shape}")  # Debug print
+    print(f"reshaped sample data: {reshaped[:, :, 2]}")  # Debug print
     n_tracks = (reshaped[:, :, 2] != 0).sum(axis=1)
+    print(n_tracks)
     for class_id in [0, 1, 2]:
+        print(pid, class_id)  # Debug print
         mask = pid == class_id
+        print(f"mask sum: {np.sum(mask)}")
+        print(n_tracks[mask])  # Debug print
         ax.hist(n_tracks[mask], bins=range(0, 22), alpha=0.5, density=True,
                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     ax.set_xlabel("Number of Tracks")
@@ -413,6 +519,7 @@ def main():
     plot_summary_stats(data, args.output)
     plot_cluster_features(data, args.output)
     plot_track_features(data, args.output)
+    plot_prongness_features(data, args.output)
     plot_decay_mode_features(data, args.output)
     plot_2d_correlations(data, args.output)
     
