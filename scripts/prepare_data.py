@@ -75,7 +75,6 @@ NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
 
 OTHER_BRANCHES = [
-    "TauJets.tauTruthProng",
     "TauJets.tauTruthDecayMode",
     "TauJets.pt",
 ]
@@ -134,7 +133,6 @@ def process_file(filepath, label):
     # Tracks as point cloud (NOT flattened)
     all_tracks = np.zeros((total_jets, MAX_TRACKS, NUM_TRACK_FEATURES), dtype=np.float32)
     all_pid = np.full(total_jets, label, dtype=np.int64)
-    all_prongness = np.full(total_jets, -1, dtype=np.int64)
     all_decay_mode = np.full(total_jets, -1, dtype=np.int64)
     
     jet_counter = 0
@@ -150,9 +148,8 @@ def process_file(filepath, label):
         # Get track data
         track_arrays = {}
         for feat_name, branch_name, _ in TRACK_BRANCHES:
-            track_arrays[feat_name] = events[branch_name][evt_idx]
+            track_arrays[feat_name] = [events[branch_name][evt_idx]]
         
-        n_charged_tracks = events["TauJets.tauTruthProng"][evt_idx]
         decay_mode = events["TauJets.tauTruthDecayMode"][evt_idx]
         
         for jet_idx in range(n_jets):
@@ -174,34 +171,18 @@ def process_file(filepath, label):
             # TRACKS (point cloud 2 - NOT flattened)
             # =========================================
             for feat_idx, (feat_name, _, apply_log) in enumerate(TRACK_BRANCHES):
-                track_feat = track_arrays[feat_name]
-                if len(track_feat) > jet_idx:
-                    jet_track_feat = track_feat[jet_idx]
-                    # Handle both array and scalar cases
-                    try:
-                        n = min(len(jet_track_feat), MAX_TRACKS)
-                        if n > 0:
-                            values = ak.to_numpy(jet_track_feat[:n])
-                            if apply_log:
-                                values = safe_log(values)
-                            all_tracks[jet_counter, :n, feat_idx] = values
-                    except TypeError:
-                        # Single value (scalar) - treat as 1 track
-                        value = float(jet_track_feat)
+                event_tracks = track_arrays[feat_name]
+                if len(event_tracks) > jet_idx:
+                    jet_tracks = event_tracks[jet_idx]
+                    if len(jet_tracks) > 0:
+                        n = min(len(jet_tracks), MAX_TRACKS)
+                        values = jet_tracks[:n]
                         if apply_log:
-                            value = safe_log(np.array([value]))[0]
-                        all_tracks[jet_counter, 0, feat_idx] = value
+                            values = safe_log(values)
+                        all_tracks[jet_counter, :n, feat_idx] = values
             
             # Decay mode (only for tau)
             if label == 1:
-                n_charged = int(n_charged_tracks[jet_idx])
-                if n_charged == 1:
-                    all_prongness[jet_counter] = 0
-                elif n_charged == 3:
-                    all_prongness[jet_counter] = 1
-                else:
-                    all_prongness[jet_counter] = -1
-                    
                 dm = int(decay_mode[jet_idx])
                 if 0 <= dm <= 4:
                     all_decay_mode[jet_counter] = dm
@@ -211,7 +192,7 @@ def process_file(filepath, label):
             jet_counter += 1
     
     print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}")
-    return all_data, all_tracks, all_pid, all_prongness, all_decay_mode
+    return all_data, all_tracks, all_pid, all_decay_mode
 
 
 def main():
@@ -235,7 +216,6 @@ def main():
     all_data = []
     all_tracks = []
     all_pid = []
-    all_prongness = []
     all_decay_mode = []
     
     for filepath, label in files_and_labels:
@@ -243,13 +223,12 @@ def main():
             print(f"Warning: {filepath} not found, skipping...")
             continue
         
-        data, tracks, pid, prongness, decay_mode = process_file(filepath, label)
+        data, tracks, pid, decay_mode = process_file(filepath, label)
         
         if data is not None:
             all_data.append(data)
             all_tracks.append(tracks)
             all_pid.append(pid)
-            all_prongness.append(prongness)
             all_decay_mode.append(decay_mode)
     
     if len(all_data) == 0:
@@ -259,15 +238,12 @@ def main():
     data = np.concatenate(all_data, axis=0)
     tracks = np.concatenate(all_tracks, axis=0)
     pid = np.concatenate(all_pid, axis=0)
-    prongness = np.concatenate(all_prongness, axis=0)
     decay_mode = np.concatenate(all_decay_mode, axis=0)
     
     print(f"\nTotal samples: {len(data)}")
     print(f"  QCD (0): {np.sum(pid == 0)}")
     print(f"  Tau (1): {np.sum(pid == 1)}")
     print(f"  Electron (2): {np.sum(pid == 2)}")
-    print(f"  1-prong: {np.sum(prongness == 0)}")
-    print(f"  3-prong: {np.sum(prongness == 1)}")
     print(f"  Decay mode 1p0n: {np.sum(decay_mode == 0)}")
     print(f"  Decay mode 1p1n: {np.sum(decay_mode == 1)}")
     print(f"  Decay mode 1pXn: {np.sum(decay_mode == 2)}")
@@ -280,7 +256,6 @@ def main():
     data = data[indices]
     tracks = tracks[indices]
     pid = pid[indices]
-    prongness = prongness[indices]
     decay_mode = decay_mode[indices]
     
     n_total = len(data)
@@ -288,18 +263,18 @@ def main():
     n_val = int(n_total * args.val_frac)
     
     splits = {
-        "train": (data[:n_train], tracks[:n_train], pid[:n_train], prongness[:n_train], decay_mode[:n_train]),
+        "train": (data[:n_train], tracks[:n_train], pid[:n_train], decay_mode[:n_train]),
         "val": (data[n_train:n_train+n_val], tracks[n_train:n_train+n_val], 
-                pid[n_train:n_train+n_val], prongness[n_train:n_train+n_val], decay_mode[n_train:n_train+n_val]),
+                pid[n_train:n_train+n_val], decay_mode[n_train:n_train+n_val]),
         "test": (data[n_train+n_val:], tracks[n_train+n_val:], 
-                 pid[n_train+n_val:], prongness[n_train+n_val:], decay_mode[n_train+n_val:]),
+                 pid[n_train+n_val:], decay_mode[n_train+n_val:]),
     }
     
     print(f"\nSplit sizes:")
     for name, (d, *_) in splits.items():
         print(f"  {name}: {len(d)}")
     
-    for split_name, (split_data, split_tracks, split_pid, split_prongness, split_dm) in splits.items():
+    for split_name, (split_data, split_tracks, split_pid, split_dm) in splits.items():
         output_path = os.path.join(args.output_dir, split_name)
         os.makedirs(output_path, exist_ok=True)
         
@@ -310,7 +285,6 @@ def main():
             f.create_dataset('data', data=split_data, compression='gzip')
             f.create_dataset('tracks', data=split_tracks, compression='gzip')
             f.create_dataset('pid', data=split_pid)
-            f.create_dataset('prongness', data=split_prongness)
             f.create_dataset('decay_mode', data=split_dm)
         
         n_samples = len(split_data)
