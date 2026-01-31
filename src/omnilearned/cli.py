@@ -92,7 +92,9 @@ def train(
     mlp_drop: float = typer.Option(0.0, help="Dropout for mlp layers"),
     feature_drop: float = typer.Option(0.0, help="Dropout for input features"),
     num_workers: int = typer.Option(16, help="Number of workers for data loading"),
-    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:7,electron_vs_qcd:2'"),
+    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2'"),
+    aux_regression_tasks_str: str = typer.Option("", 
+                        help="Auxiliary regression tasks (subset of aux_tasks): 'tes'"),
     # Option B: Tracks as separate tokens
     use_tracks: bool = typer.Option(False, help="Use tracks as separate tokens (Option B)"),
     track_dim: int = typer.Option(24, help="Number of track features"),
@@ -148,6 +150,7 @@ def train(
         num_workers,
         clip_inputs=clip_inputs,
         aux_tasks_str=aux_tasks_str,
+        aux_regression_tasks_str=aux_regression_tasks_str,
         use_tracks=use_tracks,
         track_dim=track_dim,
         use_cells=use_cells,
@@ -262,7 +265,10 @@ def evaluate(
         False, help="Clip input dataset to be within R=0.8 and atl least 500 MeV"
     ),
     num_workers: int = typer.Option(16, help="Number of workers for data loading"),
-    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:7,electron_vs_qcd:2'"),
+    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2'"),
+    aux_regression_tasks_str: str = typer.Option("", 
+                    help="Auxiliary regression tasks (subset of aux_tasks): 'tes'"),
+    
     # Option B: Tracks as separate tokens
     use_tracks: bool = typer.Option(False, help="Use tracks as separate tokens (Option B)"),
     track_dim: int = typer.Option(24, help="Number of track features"),
@@ -297,6 +303,7 @@ def evaluate(
         num_workers,
         clip_inputs=clip_inputs,
         aux_tasks_str=aux_tasks_str,
+        aux_regression_tasks_str=aux_regression_tasks_str,
         use_tracks=use_tracks,
         track_dim=track_dim,
         use_cells=use_cells,

@@ -281,6 +281,11 @@ class HEPDataset(Dataset):
 
         if cells_per_cluster is not None and self.use_cells:
             sample["cells_per_cluster"] = torch.tensor(cells_per_cluster, dtype=torch.float32)
+            
+        # Regression truth targets (e.g., TES correction)
+        # TODO: fix this guy
+        if "truth_targets" in sample:
+            sample["truth_targets"] = torch.tensor(sample["truth_targets"][sample_idx], dtype=torch.float32)
 
         return sample
 

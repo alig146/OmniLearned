@@ -5,7 +5,7 @@ Converts ROOT files to HDF5 format with:
 - data: Cluster point cloud features [N, MAX_CLUSTERS, NUM_CLUSTER_FEATURES]
 - tracks: Track point cloud features [N, MAX_TRACKS, NUM_TRACK_FEATURES]  
 - pid: Jet type label (0=QCD, 1=tau, 2=electron)
-- decay_mode: Tau decay mode (0=1-prong, 1=3-prong, -1=N/A)
+- decay_mode: Tau decay mode (0 : 1p0n, 1 : 1p1n, 2 : 1pXn, 3 : 3p0n, 4 : 3pXn, -1 : N/A)
 
 Both clusters and tracks are treated as point clouds with first features being:
 - Clusters: [dEta, dPhi, log(et), log(e), ...]
@@ -133,6 +133,7 @@ def get_all_branches():
     branches += [b for _, b, _ in CELL_BRANCHES]
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
+    branches += [b for _, b, _ in REGRESSION_TARGETS]
     branches += OTHER_BRANCHES
     return list(set(branches))
 
@@ -315,6 +316,7 @@ def process_file(filepath, label):
 
     all_pid = np.full(total_jets, label, dtype=np.int64)
     all_decay_mode = np.full(total_jets, -1, dtype=np.int64)
+    all_targets = np.zeros((total_jets, MAX_TRACKS, NUM_REGRESSION_TARGETS), dtype=np.float32)
     
     jet_counter = 0
     
@@ -473,6 +475,7 @@ def main():
     all_cells = []
     all_pid = []
     all_decay_mode = []
+    all_targets = []
     
     for filepath, label in files_and_labels:
         if not os.path.exists(filepath):
@@ -487,6 +490,7 @@ def main():
             all_cells.append(cells)
             all_pid.append(pid)
             all_decay_mode.append(decay_mode)
+            all_targets.append(targets)
     
     if len(all_data) == 0:
         print("No data processed!")
@@ -497,6 +501,7 @@ def main():
     cells = np.concatenate(all_cells, axis=0)
     pid = np.concatenate(all_pid, axis=0)
     decay_mode = np.concatenate(all_decay_mode, axis=0)
+    truth_targets = np.concatenate(all_targets, axis=0)
     
     print(f"\nTotal samples: {len(data)}")
     print(f"  QCD (0): {np.sum(pid == 0)}")
@@ -516,6 +521,7 @@ def main():
     cells = cells[indices]
     pid = pid[indices]
     decay_mode = decay_mode[indices]
+    truth_targets = truth_targets[indices]
     
     n_total = len(data)
     n_train = int(n_total * args.train_frac)
@@ -544,6 +550,7 @@ def main():
             f.create_dataset('cells', data=split_cells, compression='gzip')
             f.create_dataset('pid', data=split_pid)
             f.create_dataset('decay_mode', data=split_dm)
+            f.create_dataset('truth_targets', data=split_truth_targets)
         
         n_samples = len(split_data)
         file_indices = np.array([(0, i) for i in range(n_samples)], dtype=np.int32)
@@ -574,7 +581,8 @@ def main():
     print(f"\n  omnilearned train --dataset tau --path datasets \\")
     print(f"    --num-feat {NUM_CLUSTER_FEATURES} --num-classes 3 \\")
     print(f"    --use-tracks --track-dim {NUM_TRACK_FEATURES} \\")
-    print(f"    --aux-tasks-str 'decay_mode:2,electron_vs_qcd:2'")
+    print(f"    --aux-tasks-str 'decay_mode:2,electron_vs_qcd:2,truth_loge:1' \\")
+    print(f"    --aux-regression-tasks-str 'truth_loge'")
 
 
 if __name__ == "__main__":
