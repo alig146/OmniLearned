@@ -218,6 +218,7 @@ def get_loss(
     aux_labels=None,  # Dict: {"decay_mode": labels, "electron": labels, ...}
     aux_weights=None,  # Dict: {"decay_mode": 0.5, "electron": 0.5, ...}
     aux_masks=None,  # Dict: {"decay_mode": mask, ...} for conditional tasks
+    aux_tasks=None,  # List of task dicts with "type" field for regression vs classification
 ):
     loss = 0.0
     if outputs["y_pred"] is not None:
@@ -288,6 +289,12 @@ def get_loss(
     if outputs.get("aux_preds") is not None and aux_labels is not None:
         aux_weights = aux_weights or {}
         aux_masks = aux_masks or {}
+        # Create task type map for quick lookup
+        task_type_map = {}
+        if aux_tasks is not None:
+            for task in aux_tasks:
+                task_type_map[task["name"]] = task.get("type", "classification")
+        
         for task_name, aux_pred in outputs["aux_preds"].items():
             if task_name not in aux_labels or aux_labels[task_name] is None:
                 continue
@@ -295,6 +302,7 @@ def get_loss(
             task_labels = aux_labels[task_name]
             task_weight = aux_weights.get(task_name, 0.5)
             task_mask = aux_masks.get(task_name, None)
+            task_type = task_type_map.get(task_name, "classification")
 
             # Apply mask if provided (e.g., decay_mode only for tau samples)
             if task_mask is not None:
@@ -302,14 +310,24 @@ def get_loss(
                     continue
                 aux_pred = aux_pred[task_mask]
                 task_labels = task_labels[task_mask]
-                # Filter out invalid labels (e.g., -1)
-                valid = task_labels >= 0
-                if not valid.any():
-                    continue
-                aux_pred = aux_pred[valid]
-                task_labels = task_labels[valid]
+            
+            # Filter out invalid labels (e.g., -1)
+            valid = task_labels >= 0
+            if not valid.any():
+                continue
+            aux_pred = aux_pred[valid]
+            task_labels = task_labels[valid]
 
-            loss_aux = torch.mean(class_cost(aux_pred, task_labels))
+            # Use appropriate loss function based on task type
+            if task_type == "regression":
+                # For regression: squeeze output if needed and use MSE loss
+                aux_pred = aux_pred.squeeze(-1) if aux_pred.dim() > 1 else aux_pred
+                task_labels = task_labels.float()
+                loss_aux = torch.mean(nn.functional.mse_loss(aux_pred, task_labels, reduction="none"))
+            else:
+                # For classification: use cross entropy
+                loss_aux = torch.mean(class_cost(aux_pred, task_labels))
+            
             logs[f"loss_{task_name}"] = logs.get(f"loss_{task_name}", 0.0) + loss_aux.detach()
             loss = loss + task_weight * loss_aux
 

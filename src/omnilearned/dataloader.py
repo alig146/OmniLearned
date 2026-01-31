@@ -230,6 +230,10 @@ class HEPDataset(Dataset):
         # decay_mode: 0 : 1p0n, 1 : 1pXn, 2 : 3p0n, 3 : 3pXn, -1 : not applicable (for QCD/electron)
         if "decay_mode" in f:
             sample["decay_mode"] = torch.tensor(f["decay_mode"][sample_idx], dtype=torch.int64)
+        
+        # Regression truth targets (e.g., TES correction)
+        if "truth_targets" in f:
+            sample["truth_targets"] = torch.tensor(f["truth_targets"][sample_idx], dtype=torch.float32)
 
         # Load tracks as separate point cloud (Option B)
         if self.use_tracks and "tracks" in f:
@@ -297,7 +301,7 @@ def load_data(
         "aspen_bsm_ad_sb",
         "aspen_bsm_ad_sr",
         "aspen_bsm_ad_sr_hl",
-        "tau",  # Custom tau dataset
+        "tau",
     ]
     if dataset_name not in supported_datasets:
         raise ValueError(

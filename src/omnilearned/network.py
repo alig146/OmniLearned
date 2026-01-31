@@ -253,9 +253,16 @@ class PET_classifier(nn.Module):
         # Auxiliary task heads
         self.aux_heads = nn.ModuleDict()
         for task in self.aux_tasks:
-            self.aux_heads[task["name"]] = nn.Linear(
-                self.num_tokens * base_dim, task["num_classes"]
-            )
+            if task.get("type") == "regression":
+                # Regression tasks output a single continuous value
+                self.aux_heads[task["name"]] = nn.Linear(
+                    self.num_tokens * base_dim, 1
+                )
+            else:
+                # Classification tasks output class probabilities
+                self.aux_heads[task["name"]] = nn.Linear(
+                    self.num_tokens * base_dim, task["num_classes"]
+                )
 
         self.initialize_weights()
 

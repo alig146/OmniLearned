@@ -31,8 +31,9 @@ def eval_model(
     outdir="",
     save_tag="pretrain",
     rank=0,
+    aux_regression_tasks=None,
 ):
-    prediction, cond, labels, aux_preds, decay_modes = test_step(model, test_loader, mode, device)
+    prediction, cond, labels, aux_preds, decay_modes, regression_truth = test_step(model, test_loader, mode, device)
 
     if mode in ["classifier", "regression", "segmentation"]:
         if use_event_loss:
@@ -58,7 +59,13 @@ def eval_model(
             
             # Add auxiliary task predictions
             for task_name, task_pred in aux_preds.items():
-                save_dict[f"aux_{task_name}_pred"] = task_pred.softmax(-1).cpu().numpy()
+                # Apply softmax only for classification tasks
+                if aux_regression_tasks and task_name in aux_regression_tasks:
+                    save_dict[f"aux_{task_name}_pred"] = task_pred.cpu().numpy()
+                    if regression_truth is not None and task_name in regression_truth:
+                        save_dict[f"aux_{task_name}_true"] = regression_truth[task_name].cpu().numpy()
+                else:
+                    save_dict[f"aux_{task_name}_pred"] = task_pred.softmax(-1).cpu().numpy()
             
             # Add decay_mode true labels if available
             if decay_modes is not None:
@@ -91,6 +98,7 @@ def test_step(
     conds = []
     aux_preds_all = {}  # Collect auxiliary predictions
     decay_modes = []    # Collect true decay mode labels
+    regression_truth_all = {}  # Collect regression truth labels
 
     for ib, batch in enumerate(
         tqdm(dataloader, desc="Iterating", total=len(dataloader))
@@ -136,6 +144,15 @@ def test_step(
         if batch.get("decay_mode") is not None:
             decay_modes.append(batch["decay_mode"].to(device))
         
+        # Collect regression truth labels if available
+        if batch.get("truth_targets") is not None:
+            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
+            tasks = ["tes"]  # Must match the task names in training
+            for idx, task in enumerate(tasks):
+                if task not in regression_truth_all:
+                    regression_truth_all[task] = []
+                regression_truth_all[task].append(truth_targets[:, idx])
+        
         if mode == "generator":
             if batch["pid"] is not None:
                 preds[-1] = torch.cat(
@@ -157,12 +174,22 @@ def test_step(
     # Concatenate decay modes if collected
     decay_modes_concat = torch.cat(decay_modes).to(device) if decay_modes else None
     
+    # Concatenate regression truth labels
+    regression_truth_concat = {}
+    for task_name, task_truths in regression_truth_all.items():
+        regression_truth_concat[task_name] = torch.cat(task_truths).to(device)
+    
+    if is_master_node() and not regression_truth_all:
+        print("WARNING: No regression truth labels were collected from batches.")
+        print("Make sure 'truth_targets' is included in the dataloader output.")
+    
     return (
         preds,
         torch.cat(conds).to(device) if conds[0] is not None else None,
         torch.cat(labels).to(device),
         aux_preds_concat,
         decay_modes_concat,
+        regression_truth_concat,
     )
 
 
@@ -193,6 +220,7 @@ def run(
     num_workers: int = 16,
     clip_inputs: bool = False,
     aux_tasks_str: str = "",
+    aux_regression_tasks_str: str = "",
     use_tracks: bool = False,
     track_dim: int = 24,
 ):
@@ -200,13 +228,26 @@ def run(
 
     model_params = get_model_parameters(model_size)
 
+    # Parse regression task names
+    regression_task_names = set()
+    if aux_regression_tasks_str:
+        regression_task_names = set(name.strip() for name in aux_regression_tasks_str.split(","))
+
     # Parse auxiliary tasks
     aux_tasks = None
     if aux_tasks_str:
         aux_tasks = []
         for task_def in aux_tasks_str.split(","):
             name, num_classes_aux = task_def.split(":")
-            aux_tasks.append({"name": name.strip(), "num_classes": int(num_classes_aux)})
+            name = name.strip()
+            task_info = {"name": name}
+            # Mark as regression or classification
+            if name in regression_task_names:
+                task_info["type"] = "regression"
+            else:
+                task_info["type"] = "classification"
+                task_info["num_classes"] = int(num_classes_aux)
+            aux_tasks.append(task_info)
 
     # set up model
     model = PET2(
@@ -309,6 +350,7 @@ def run(
         rank=rank,
         outdir=outdir,
         save_tag=save_tag,
+        aux_regression_tasks=regression_task_names,
     )
     dist.barrier()
     dist.destroy_process_group()

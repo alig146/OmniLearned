@@ -102,6 +102,13 @@ def train_step(
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+        
+        # Regression tasks
+        if batch.get("truth_targets") is not None:
+            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
+            tasks = ["tes"]
+            for idx, task in enumerate(tasks):
+                aux_labels[task] = truth_targets[:, idx]
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -121,6 +128,7 @@ def train_step(
                 data_pid=data_pid,
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
+                aux_tasks=aux_tasks if aux_tasks else None,
             )
 
         if use_amp and gscaler is not None:
@@ -202,6 +210,13 @@ def val_step(
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+        
+        # Regression tasks
+        if batch.get("truth_targets") is not None:
+            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
+            tasks = ["tes"]
+            for idx, task in enumerate(tasks):
+                aux_labels[task] = truth_targets[:, idx]
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
@@ -218,6 +233,7 @@ def val_step(
                 data_pid=data_pid,
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
+                aux_tasks=aux_tasks if aux_tasks else None,
             )
 
     if dist.is_initialized():
@@ -410,11 +426,19 @@ def run(
     # Auxiliary tasks: comma-separated "name:num_classes" pairs
     # e.g., "decay_mode:2,electron_label:2"
     aux_tasks_str: str = "",
+    # Regression auxiliary tasks: comma-separated names
+    # e.g., "pt_regression,eta_regression"
+    aux_regression_tasks_str: str = "",
     # Option B: Tracks as separate tokens
     use_tracks: bool = False,
     track_dim: int = 24,
 ):
     local_rank, rank, size = ddp_setup()
+
+    # Parse regression task names
+    regression_task_names = set()
+    if aux_regression_tasks_str:
+        regression_task_names = set(name.strip() for name in aux_regression_tasks_str.split(","))
 
     # Parse auxiliary tasks
     aux_tasks = None
@@ -422,7 +446,14 @@ def run(
         aux_tasks = []
         for task_def in aux_tasks_str.split(","):
             name, num_cls = task_def.strip().split(":")
-            aux_tasks.append({"name": name, "num_classes": int(num_cls)})
+            task_info = {"name": name}
+            # Mark as regression or classification
+            if name in regression_task_names:
+                task_info["type"] = "regression"
+            else:
+                task_info["type"] = "classification"
+                task_info["num_classes"] = int(num_cls)
+            aux_tasks.append(task_info)
 
     model_params = get_model_parameters(model_size)
     # set up model
