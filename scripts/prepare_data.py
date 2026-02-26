@@ -25,64 +25,105 @@ from tqdm import tqdm
 
 
 # Configuration
-MAX_CLUSTERS = 20
-MAX_TRACKS = 20
+MAX_CLUSTERS = 15
+MAX_TRACKS = 10
+MAX_CELLS = 20
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
 CLUSTER_BRANCHES = [
-    ("cls_dEta", "TauClusters.cls_dEta", False),           # Feature 0: Δη
-    ("cls_dPhi", "TauClusters.cls_dPhi", False),           # Feature 1: Δφ
-    ("cls_et", "TauClusters.cls_et", True),                # Feature 2: log(pT)
-    ("cls_e", "TauClusters.cls_e", True),                  # Feature 3: log(E)
-    ("cls_SECOND_R", "TauClusters.cls_SECOND_R", False),
-    ("cls_SECOND_LAMBDA", "TauClusters.cls_SECOND_LAMBDA", False),
-    ("cls_FIRST_ENG_DENS", "TauClusters.cls_FIRST_ENG_DENS", False),
-    ("cls_EM_PROBABILITY", "TauClusters.cls_EM_PROBABILITY", False),
-    ("cls_CENTER_MAG", "TauClusters.cls_CENTER_MAG", False),
-    ("cls_CENTER_LAMBDA", "TauClusters.cls_CENTER_LAMBDA", False),
+    ("cls_E", "cls_E", True),                # Feature 2: E
+    ("cls_ET", "cls_ET", True),                  # Feature 3: E_{T}
+    ("cls_Eta", "cls_Eta", False),           # Feature 0: η
+    ("cls_Phi", "cls_Phi", False),           # Feature 1: φ
+    ("cls_FIRST_ENG_DENS", "cls_FIRST_ENG_DENS", False),
+
+#### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
+    #("cls_SECOND_R", "TauClusters.cls_SECOND_R", False),
+    #("cls_SECOND_LAMBDA", "TauClusters.cls_SECOND_LAMBDA", False),
+    #("cls_EM_PROBABILITY", "TauClusters.cls_EM_PROBABILITY", False),
+    #("cls_CENTER_MAG", "TauClusters.cls_CENTER_MAG", False),
+    #("cls_CENTER_LAMBDA", "TauClusters.cls_CENTER_LAMBDA", False),
 ]
 
 # Track branches (all features, will be flattened into global)
 TRACK_BRANCHES = [
-    ("dEta", "TauTracks.dEta", False),
-    ("dPhi", "TauTracks.dPhi", False),
-    ("trackPt", "TauTracks.trackPt", True),                # log(pT)
-    ("theta", "TauTracks.theta", False),
-    ("numberOfInnermostPixelLayerHits", "TauTracks.numberOfInnermostPixelLayerHits", False),
-    ("numberOfPixelHits", "TauTracks.numberOfPixelHits", False),
-    ("numberOfPixelSharedHits", "TauTracks.numberOfPixelSharedHits", False),
-    ("numberOfPixelDeadSensors", "TauTracks.numberOfPixelDeadSensors", False),
-    ("numberOfSCTHits", "TauTracks.numberOfSCTHits", False),
-    ("numberOfSCTSharedHits", "TauTracks.numberOfSCTSharedHits", False),
-    ("numberOfSCTDeadSensors", "TauTracks.numberOfSCTDeadSensors", False),
-    ("numberOfTRTHighThresholdHits", "TauTracks.numberOfTRTHighThresholdHits", False),
-    ("numberOfTRTHits", "TauTracks.numberOfTRTHits", False),
-    ("nPixHits", "TauTracks.nPixHits", False),
-    ("nSCTHits", "TauTracks.nSCTHits", False),
-    ("nSiHits", "TauTracks.nSiHits", False),
-    ("nIBLHitsAndExp", "TauTracks.nIBLHitsAndExp", False),
-    ("expectInnermostPixelLayerHit", "TauTracks.expectInnermostPixelLayerHit", False),
-    ("expectNextToInnermostPixelLayerHit", "TauTracks.expectNextToInnermostPixelLayerHit", False),
-    ("numberOfContribPixelLayers", "TauTracks.numberOfContribPixelLayers", False),
-    ("numberOfPixelHoles", "TauTracks.numberOfPixelHoles", False),
-    ("numberOfSCTHoles", "TauTracks.numberOfSCTHoles", False),
-    ("d0_old", "TauTracks.d0_old", False),
-    ("qOverP", "TauTracks.qOverP", False),
+
+    ("trk_E", "trk_E", True),
+    ("trk_pT", "trk_pT", True),
+    ("trk_Eta", "trk_Eta", False),
+    ("trk_Phi", "trk_Phi", False),
+    #("trk_eProbNN", "trk_eProbNN", False), # We should not use this anyway, but eventually if we have samples we should
+    ("trk_charge", "trk_charge", False),
+    ("trk_d0", "trk_d0", False),
+    ("trk_z0", "trk_z0", False),
+    ("trk_z0sintheta", "trk_z0sintheta", False),
+    ("trk_nTRTHits", "trk_nTRTHits", False),
+    ("trk_nTRTHighThresholdHits", "trk_nTRTHighThresholdHits", False),
+    ("trk_nSCTHits", "trk_nSCTHits", False),
+    ("trk_nPixelHits", "trk_nPixelHHits", False),
+    ("trk_nBLayerHits", "trk_nBLayerHits", False),
+]
+#### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
+#    ("dEta", "TauTracks.dEta", False),
+#    ("dPhi", "TauTracks.dPhi", False),
+#    ("trackPt", "TauTracks.trackPt", True),                # log(pT)
+#    ("theta", "TauTracks.theta", False),
+#    ("numberOfInnermostPixelLayerHits", "TauTracks.numberOfInnermostPixelLayerHits", False),
+#    ("numberOfPixelHits", "TauTracks.numberOfPixelHits", False),
+#    ("numberOfPixelSharedHits", "TauTracks.numberOfPixelSharedHits", False),
+#    ("numberOfPixelDeadSensors", "TauTracks.numberOfPixelDeadSensors", False),
+#    ("numberOfSCTHits", "TauTracks.numberOfSCTHits", False),
+#    ("numberOfSCTSharedHits", "TauTracks.numberOfSCTSharedHits", False),
+#    ("numberOfSCTDeadSensors", "TauTracks.numberOfSCTDeadSensors", False),
+#    ("numberOfTRTHighThresholdHits", "TauTracks.numberOfTRTHighThresholdHits", False),
+#    ("numberOfTRTHits", "TauTracks.numberOfTRTHits", False),
+#    ("nPixHits", "TauTracks.nPixHits", False),
+#    ("nSCTHits", "TauTracks.nSCTHits", False),
+#    ("nSiHits", "TauTracks.nSiHits", False),
+#    ("nIBLHitsAndExp", "TauTracks.nIBLHitsAndExp", False),
+#    ("expectInnermostPixelLayerHit", "TauTracks.expectInnermostPixelLayerHit", False),
+#    ("expectNextToInnermostPixelLayerHit", "TauTracks.expectNextToInnermostPixelLayerHit", False),
+#    ("numberOfContribPixelLayers", "TauTracks.numberOfContribPixelLayers", False),
+#    ("numberOfPixelHoles", "TauTracks.numberOfPixelHoles", False),
+#    ("numberOfSCTHoles", "TauTracks.numberOfSCTHoles", False),
+#    ("d0_old", "TauTracks.d0_old", False),
+#    ("qOverP", "TauTracks.qOverP", False),
+
+
+CELL_BRANCHES = [
+    ("cell_E", "cell_E", True),
+    ("cell_ET", "cell_ET", True),
+    ("cell_Eta", "cell_Eta", False),
+    ("cell_Phi", "cell_Phi", False),
+    ("cell_Eta", "cell_Eta", False),
+    ("cell_Phi", "cell_Phi", False),
+    ("cell_sintheta", "cell_sintheta", False),
+    ("cell_costheta", "cell_costheta", False),
+    ("cell_sinphi", "cell_sinphi", False),
+    ("cell_cosphi", "cell_cosphi", False),
+    ("cell_layer", "cell_layer", False),
+    ("cell_x", "cell_x", False),
+    ("cell_y", "cell_y", False),
+    ("cell_z", "cell_z", False),
 ]
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
+NUM_CELL_FEATURES = len(CELL_BRANCHES)
 
 OTHER_BRANCHES = [
-    "TauJets.tauTruthDecayMode",
-    "TauJets.pt",
+    "truth_label",
+    "truth_pt",
+    "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
+    "truth_pdgId", 
 ]
 
 
 def get_all_branches():
     """Get list of all branches to read."""
     branches = []
+    branches += [b for _, b, _ in CELL_BRANCHES]
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
     branches += OTHER_BRANCHES
@@ -102,6 +143,7 @@ def process_file(filepath, label):
     Returns:
         data: Cluster features [N_jets, MAX_CLUSTERS, NUM_CLUSTER_FEATURES]
         tracks: Track features [N_jets, MAX_TRACKS, NUM_TRACK_FEATURES]
+        cells: Cell features [N_jets, MAX_CELLS, NUM_CELL_FEATURES]
         pid: Jet labels [N_jets]
         decay_mode: Decay mode labels [N_jets]
     """
@@ -111,11 +153,11 @@ def process_file(filepath, label):
         f = uproot.open(f"{filepath}:CollectionTree")
     except Exception as e:
         print(f"Error opening {filepath}: {e}")
-        return None, None, None, None
+        return None, None, None, None, None
     
     if f.num_entries == 0:
         print(f"File {filepath} is empty, skipping...")
-        return None, None, None, None
+        return None, None, None, None, None
     
     branches = get_all_branches()
     events = f.arrays(branches, library='ak')
@@ -127,11 +169,15 @@ def process_file(filepath, label):
     print(f"  Total jets: {total_jets}")
     print(f"  Cluster features: {NUM_CLUSTER_FEATURES}")
     print(f"  Track features: {NUM_TRACK_FEATURES}")
+    print(f"  Cell features: {NUM_CELL_FEATURES}")
     
     # Clusters as point cloud
     all_data = np.zeros((total_jets, MAX_CLUSTERS, NUM_CLUSTER_FEATURES), dtype=np.float32)
     # Tracks as point cloud (NOT flattened)
     all_tracks = np.zeros((total_jets, MAX_TRACKS, NUM_TRACK_FEATURES), dtype=np.float32)
+    # Cells as point cloud
+    all_cells = np.zeros((total_jets, MAX_CELLS, NUM_CELL_FEATURES), dtype=np.float32)
+
     all_pid = np.full(total_jets, label, dtype=np.int64)
     all_decay_mode = np.full(total_jets, -1, dtype=np.int64)
     
@@ -150,7 +196,12 @@ def process_file(filepath, label):
         for feat_name, branch_name, _ in TRACK_BRANCHES:
             track_arrays[feat_name] = [events[branch_name][evt_idx]]
         
-        decay_mode = events["TauJets.tauTruthDecayMode"][evt_idx]
+        # Get cell data
+        cell_arrays = {}
+        for feat_name, branch_name, _ in CELL_BRANCHES:
+            cell_arrays[feat_name] = events[branch_name][evt_idx]
+        
+        decay_mode = events["truth_decayMode"][evt_idx]
         
         for jet_idx in range(n_jets):
             # =========================================
@@ -166,7 +217,7 @@ def process_file(filepath, label):
                         if apply_log:
                             values = safe_log(values)
                         all_data[jet_counter, :n, feat_idx] = values
-            
+
             # =========================================
             # TRACKS (point cloud 2 - NOT flattened)
             # =========================================
@@ -180,19 +231,34 @@ def process_file(filepath, label):
                         if apply_log:
                             values = safe_log(values)
                         all_tracks[jet_counter, :n, feat_idx] = values
-            
+
+            # =========================================
+            # CELLS (point cloud 3)
+            # =========================================
+            for feat_idx, (feat_name, _, apply_log) in enumerate(CELL_BRANCHES):
+                event_cells = cell_arrays[feat_name]
+                if len(event_cells) > jet_idx:
+                    jet_cells = event_cells[jet_idx]
+                    if len(jet_cells) > 0:
+                        n = min(len(jet_cells), MAX_CELLS)
+                        values = ak.to_numpy(jet_cells[:n])
+                        if apply_log:
+                            values = safe_log(values)
+                        all_cells[jet_counter, :n, feat_idx] = values
+
             # Decay mode (only for tau)
-            if label == 1:
-                dm = int(decay_mode[jet_idx])
-                if 0 <= dm <= 4:
-                    all_decay_mode[jet_counter] = dm
-                else:
-                    all_decay_mode[jet_counter] = -1              
+            #if label == 1:
+            #    dm = int(decay_mode[jet_idx])
+            #    if 0 <= dm <= 4:
+            #        all_decay_mode[jet_counter] = dm
+            #    else:
+            #        all_decay_mode[jet_counter] = -1 
+            all_decay_mode[jet_counter] =int(decay_mode[jet_idx]) if label == 1 else -1             
             
             jet_counter += 1
     
-    print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}")
-    return all_data, all_tracks, all_pid, all_decay_mode
+    print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, cells={all_cells.shape}")
+    return all_data, all_tracks, all_cells, all_pid, all_decay_mode
 
 
 def main():
@@ -209,12 +275,13 @@ def main():
     
     files_and_labels = [
         (os.path.join(args.input_dir, "JZ.root"), 0),
-        (os.path.join(args.input_dir, "Gammatautau.root"), 1),
-        (os.path.join(args.input_dir, "Gammaee.root"), 2),
+        #(os.path.join(args.input_dir, "Gammatautau.root"), 1),
+        #(os.path.join(args.input_dir, "Gammaee.root"), 2),
     ]
     
     all_data = []
     all_tracks = []
+    all_cells = []
     all_pid = []
     all_decay_mode = []
     
@@ -223,11 +290,12 @@ def main():
             print(f"Warning: {filepath} not found, skipping...")
             continue
         
-        data, tracks, pid, decay_mode = process_file(filepath, label)
+        data, tracks, cells, pid, decay_mode = process_file(filepath, label)
         
         if data is not None:
             all_data.append(data)
             all_tracks.append(tracks)
+            all_cells.append(cells)
             all_pid.append(pid)
             all_decay_mode.append(decay_mode)
     
@@ -237,6 +305,7 @@ def main():
     
     data = np.concatenate(all_data, axis=0)
     tracks = np.concatenate(all_tracks, axis=0)
+    cells = np.concatenate(all_cells, axis=0)
     pid = np.concatenate(all_pid, axis=0)
     decay_mode = np.concatenate(all_decay_mode, axis=0)
     
@@ -249,12 +318,13 @@ def main():
     print(f"  Decay mode 1pXn: {np.sum(decay_mode == 2)}")
     print(f"  Decay mode 3p0n: {np.sum(decay_mode == 3)}")
     print(f"  Decay mode 3pXn: {np.sum(decay_mode == 4)}")
-    print(f"  Decay mode N/A: {np.sum(decay_mode == -1)}")
+    print(f"  Decay mode N/A: {np.sum((decay_mode < 0) | (decay_mode > 4))}")
     
     np.random.seed(42)
     indices = np.random.permutation(len(data))
     data = data[indices]
     tracks = tracks[indices]
+    cells = cells[indices]
     pid = pid[indices]
     decay_mode = decay_mode[indices]
     
@@ -263,18 +333,16 @@ def main():
     n_val = int(n_total * args.val_frac)
     
     splits = {
-        "train": (data[:n_train], tracks[:n_train], pid[:n_train], decay_mode[:n_train]),
-        "val": (data[n_train:n_train+n_val], tracks[n_train:n_train+n_val], 
-                pid[n_train:n_train+n_val], decay_mode[n_train:n_train+n_val]),
-        "test": (data[n_train+n_val:], tracks[n_train+n_val:], 
-                 pid[n_train+n_val:], decay_mode[n_train+n_val:]),
+        "train": (data[:n_train], tracks[:n_train], cells[:n_train], pid[:n_train], decay_mode[:n_train]),
+        "val": (data[n_train:n_train+n_val], tracks[n_train:n_train+n_val], cells[n_train:n_train+n_val], pid[n_train:n_train+n_val], decay_mode[n_train:n_train+n_val]),
+        "test": (data[n_train+n_val:], tracks[n_train+n_val:], cells[n_train+n_val:], pid[n_train+n_val:], decay_mode[n_train+n_val:]),
     }
     
     print(f"\nSplit sizes:")
     for name, (d, *_) in splits.items():
         print(f"  {name}: {len(d)}")
     
-    for split_name, (split_data, split_tracks, split_pid, split_dm) in splits.items():
+    for split_name, (split_data, split_tracks, split_cells, split_pid, split_dm) in splits.items():
         output_path = os.path.join(args.output_dir, split_name)
         os.makedirs(output_path, exist_ok=True)
         
@@ -284,6 +352,7 @@ def main():
         with h5py.File(filepath, 'w') as f:
             f.create_dataset('data', data=split_data, compression='gzip')
             f.create_dataset('tracks', data=split_tracks, compression='gzip')
+            f.create_dataset('cells', data=split_cells, compression='gzip')
             f.create_dataset('pid', data=split_pid)
             f.create_dataset('decay_mode', data=split_dm)
         
@@ -306,6 +375,9 @@ def main():
         print(f"    {i}: {name}")
     print(f"\nTrack features ({NUM_TRACK_FEATURES}):")
     for i, (name, _, _) in enumerate(TRACK_BRANCHES):
+        print(f"    {i}: {name}")
+    print(f"\nCell features ({NUM_CELL_FEATURES}):")
+    for i, (name, _, _) in enumerate(CELL_BRANCHES):
         print(f"    {i}: {name}")
     print(f"\n" + "="*60)
     print("TRAINING COMMAND")
