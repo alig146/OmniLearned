@@ -61,7 +61,7 @@ TRACK_BRANCHES = [
     ("trk_nTRTHits", "trk_nTRTHits", False),
     ("trk_nTRTHighThresholdHits", "trk_nTRTHighThresholdHits", False),
     ("trk_nSCTHits", "trk_nSCTHits", False),
-    ("trk_nPixelHits", "trk_nPixelHHits", False),
+    ("trk_nPixelHits", "trk_nPixelHits", False),
     ("trk_nBLayerHits", "trk_nBLayerHits", False),
 ]
 #### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
@@ -164,7 +164,7 @@ def process_file(filepath, label):
     n_events = len(events)
     print(f"  Found {n_events} events")
     
-    n_jets_per_event = ak.num(events["TauJets.pt"])
+    n_jets_per_event = ak.num(events["truth_label"])
     total_jets = int(ak.sum(n_jets_per_event))
     print(f"  Total jets: {total_jets}")
     print(f"  Cluster features: {NUM_CLUSTER_FEATURES}")
@@ -211,9 +211,17 @@ def process_file(filepath, label):
                 event_clusters = cluster_arrays[feat_name]
                 if len(event_clusters) > jet_idx:
                     jet_clusters = event_clusters[jet_idx]
-                    if len(jet_clusters) > 0:
-                        n = min(len(jet_clusters), MAX_CLUSTERS)
-                        values = ak.to_numpy(jet_clusters[:n])
+                    # Check if jet_clusters is an array or scalar
+                    try:
+                        cluster_len = len(jet_clusters)
+                    except TypeError:
+                        # It's a scalar, treat as single value
+                        cluster_len = 1
+                        jet_clusters = [jet_clusters]
+                    
+                    if cluster_len > 0:
+                        n = min(cluster_len, MAX_CLUSTERS)
+                        values = ak.to_numpy(jet_clusters[:n]) if not isinstance(jet_clusters, list) else np.array(jet_clusters[:n])
                         if apply_log:
                             values = safe_log(values)
                         all_data[jet_counter, :n, feat_idx] = values
@@ -225,9 +233,17 @@ def process_file(filepath, label):
                 event_tracks = track_arrays[feat_name]
                 if len(event_tracks) > jet_idx:
                     jet_tracks = event_tracks[jet_idx]
-                    if len(jet_tracks) > 0:
-                        n = min(len(jet_tracks), MAX_TRACKS)
-                        values = jet_tracks[:n]
+                    # Check if jet_tracks is an array or scalar
+                    try:
+                        track_len = len(jet_tracks)
+                    except TypeError:
+                        # It's a scalar, treat as single value
+                        track_len = 1
+                        jet_tracks = [jet_tracks]
+                    
+                    if track_len > 0:
+                        n = min(track_len, MAX_TRACKS)
+                        values = jet_tracks[:n] if not isinstance(jet_tracks, list) else np.array(jet_tracks[:n])
                         if apply_log:
                             values = safe_log(values)
                         all_tracks[jet_counter, :n, feat_idx] = values
@@ -239,9 +255,17 @@ def process_file(filepath, label):
                 event_cells = cell_arrays[feat_name]
                 if len(event_cells) > jet_idx:
                     jet_cells = event_cells[jet_idx]
-                    if len(jet_cells) > 0:
-                        n = min(len(jet_cells), MAX_CELLS)
-                        values = ak.to_numpy(jet_cells[:n])
+                    # Check if jet_cells is an array or scalar
+                    try:
+                        cell_len = len(jet_cells)
+                    except TypeError:
+                        # It's a scalar, treat as single value
+                        cell_len = 1
+                        jet_cells = [jet_cells]
+                    
+                    if cell_len > 0:
+                        n = min(cell_len, MAX_CELLS)
+                        values = ak.to_numpy(jet_cells[:n]) if not isinstance(jet_cells, list) else np.array(jet_cells[:n])
                         if apply_log:
                             values = safe_log(values)
                         all_cells[jet_counter, :n, feat_idx] = values
@@ -274,7 +298,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     files_and_labels = [
-        (os.path.join(args.input_dir, "JZ.root"), 0),
+        (os.path.join(args.input_dir, "user.nkyriaco.48808733.EXT0._000245.ntuple.root"), 1),
         #(os.path.join(args.input_dir, "Gammatautau.root"), 1),
         #(os.path.join(args.input_dir, "Gammaee.root"), 2),
     ]
