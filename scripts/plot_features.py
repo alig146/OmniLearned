@@ -10,47 +10,47 @@ import h5py
 import matplotlib.pyplot as plt
 import argparse
 import os
-from matplotlib.backends.backend_pdf import PdfPages
 
 # Feature names matching prepare_data.py
 CLUSTER_FEATURE_NAMES = [
-    "cls_dEta (Δη)",
-    "cls_dPhi (Δφ)",
-    "cls_et (log pT)",
-    "cls_e (log E)",
-    "cls_SECOND_R",
-    "cls_SECOND_LAMBDA",
+    "cls_E (log)",
+    "cls_ET (log)",
+    "cls_Eta",
+    "cls_Phi",
     "cls_FIRST_ENG_DENS",
-    "cls_EM_PROBABILITY",
-    "cls_CENTER_MAG",
-    "cls_CENTER_LAMBDA",
 ]
 
 TRACK_FEATURE_NAMES = [
-    "dEta",
-    "dPhi",
-    "trackPt (log)",
-    "theta",
-    "numberOfInnermostPixelLayerHits",
-    "numberOfPixelHits",
-    "numberOfPixelSharedHits",
-    "numberOfPixelDeadSensors",
-    "numberOfSCTHits",
-    "numberOfSCTSharedHits",
-    "numberOfSCTDeadSensors",
-    "numberOfTRTHighThresholdHits",
-    "numberOfTRTHits",
-    "nPixHits",
-    "nSCTHits",
-    "nSiHits",
-    "nIBLHitsAndExp",
-    "expectInnermostPixelLayerHit",
-    "expectNextToInnermostPixelLayerHit",
-    "numberOfContribPixelLayers",
-    "numberOfPixelHoles",
-    "numberOfSCTHoles",
-    "d0_old",
-    "qOverP",
+    "trk_E (log)",
+    "trk_pT (log)",
+    "trk_Eta",
+    "trk_Phi",
+    "trk_charge",
+    "trk_d0",
+    "trk_z0",
+    "trk_z0sintheta",
+    "trk_nTRTHits",
+    "trk_nTRTHighThresholdHits",
+    "trk_nSCTHits",
+    "trk_nPixelHits",
+    "trk_nBLayerHits",
+]
+
+CELL_FEATURE_NAMES = [
+    "cell_E (log)",
+    "cell_ET (log)",
+    "cell_Eta",
+    "cell_Phi",
+    "cell_Eta_dup",
+    "cell_Phi_dup",
+    "cell_sintheta",
+    "cell_costheta",
+    "cell_sinphi",
+    "cell_cosphi",
+    "cell_layer",
+    "cell_x",
+    "cell_y",
+    "cell_z",
 ]
 
 REGRESSION_TARGET_NAMES = [
@@ -63,7 +63,9 @@ DECAY_MODE_NAMES = {0: "1p0n", 1: "1p1n", 2: "1pXn", 3: "3p0n", 4: "3pXn"}
 DECAY_MODE_COLORS = {0: "#e41a1c", 1: "#377eb8", 2: "#4daf4a", 3: "#984ea3", 4: "#ff7f00"}
 
 MAX_TRACKS = 20
+MAX_CELLS = 500
 NUM_TRACK_FEATURES = len(TRACK_FEATURE_NAMES)
+NUM_CELL_FEATURES = len(CELL_FEATURE_NAMES)
 
 
 def load_data(filepath):
@@ -73,6 +75,7 @@ def load_data(filepath):
         data = {
             "clusters": f["data"][:],
             "tracks": f["tracks"][:],
+            "cells": f["cells"][:],
             "pid": f["pid"][:],
             "decay_mode": f["decay_mode"][:],
         }
@@ -82,6 +85,7 @@ def load_data(filepath):
     print(f"  Loaded {len(data['pid'])} jets")
     print(f"  Clusters shape: {data['clusters'].shape}")
     print(f"  Tracks shape: {data['tracks'].shape}")
+    print(f"  Cells shape: {data['cells'].shape}")
     print(f"  Regression targets shape: {data['targets'].shape if 'targets' in data else 'N/A'}")
     
     return data
@@ -89,9 +93,16 @@ def load_data(filepath):
 
 def get_valid_cluster_values(clusters, feature_idx):
     """Extract non-zero (valid) cluster values for a feature."""
-    # Clusters are zero-padded; use feature 2 (log pT) to find valid entries
-    valid_mask = clusters[:, :, 2] != 0
+    # Clusters are zero-padded; use feature 0 (cls_E) to find valid entries
+    valid_mask = clusters[:, :, 0] != 0
     values = clusters[:, :, feature_idx][valid_mask]
+    return values
+
+def get_valid_cell_values(cells, feature_idx):
+    """Extract non-zero (valid) cell values for a feature."""
+    # Cells are zero-padded; use feature 0 (cell_E) to find valid entries
+    valid_mask = cells[:, :, 0] != 0
+    values = cells[:, :, feature_idx][valid_mask]
     return values
 
 def get_valid_target_values(targets, target_idx):
@@ -113,30 +124,25 @@ def get_all_track_values(tracks, feature_idx):
     """Get all non-zero track values for a feature across all tracks."""
     n_jets = tracks.shape[0]
     reshaped = tracks.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
-    # Use feature 2 (log trackPt) to identify valid tracks
-    valid_mask = reshaped[:, :, 2] != 0
+    # Use feature 1 (log trackPt) to identify valid tracks
+    valid_mask = reshaped[:, :, 1] != 0
     values = reshaped[:, :, feature_idx][valid_mask]
     return values
 
 
 def plot_cluster_features(data, output_dir):
-    """Plot all cluster feature distributions."""
+    """Plot individual cluster feature distributions."""
     print("\nPlotting cluster features...")
     
     clusters = data["clusters"]
     pid = data["pid"]
     
     n_features = clusters.shape[2]
-    n_cols = 3
-    n_rows = (n_features + n_cols - 1) // n_cols
-    
-    # Plot by jet type
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
-    axes = axes.flatten()
     
     for i in range(n_features):
-        ax = axes[i]
         feature_name = CLUSTER_FEATURE_NAMES[i] if i < len(CLUSTER_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         for class_id in [0, 1, 2]:
             mask = pid == class_id
@@ -150,39 +156,32 @@ def plot_cluster_features(data, output_dir):
                 ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
                        label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
         
-        ax.set_xlabel(feature_name)
-        ax.set_ylabel("Density")
-        ax.legend()
-        ax.set_title(f"Cluster: {feature_name}")
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Cluster: {feature_name}", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"cluster_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
     
-    # Hide unused subplots
-    for i in range(n_features, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "cluster_features_by_class.png"), dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved cluster_features_by_class.png")
+    print(f"  Saved {n_features} cluster feature plots")
 
 
 def plot_track_features(data, output_dir):
-    """Plot all track feature distributions."""
+    """Plot individual track feature distributions."""
     print("\nPlotting track features...")
     
     tracks = data["tracks"]
     pid = data["pid"]
     
     n_features = NUM_TRACK_FEATURES
-    n_cols = 4
-    n_rows = (n_features + n_cols - 1) // n_cols
-    
-    # Plot by jet type
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
-    axes = axes.flatten()
     
     for i in range(n_features):
-        ax = axes[i]
         feature_name = TRACK_FEATURE_NAMES[i] if i < len(TRACK_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         for class_id in [0, 1, 2]:
             mask = pid == class_id
@@ -197,23 +196,60 @@ def plot_track_features(data, output_dir):
                     ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
                            label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
         
-        ax.set_xlabel(feature_name)
-        ax.set_ylabel("Density")
-        ax.legend(fontsize=8)
-        ax.set_title(f"Track: {feature_name}", fontsize=10)
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Track: {feature_name}", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"track_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
     
-    # Hide unused subplots
-    for i in range(n_features, len(axes)):
-        axes[i].set_visible(False)
+    print(f"  Saved {n_features} track feature plots")
+
+
+def plot_cell_features(data, output_dir):
+    """Plot individual cell feature distributions."""
+    print("\nPlotting cell features...")
     
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "track_features_by_class.png"), dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved track_features_by_class.png")
+    cells = data["cells"]
+    pid = data["pid"]
+    
+    n_features = NUM_CELL_FEATURES
+    
+    for i in range(n_features):
+        feature_name = CELL_FEATURE_NAMES[i] if i < len(CELL_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        for class_id in [0, 1, 2]:
+            mask = pid == class_id
+            if mask.sum() == 0:
+                continue
+            values = get_valid_cell_values(cells[mask], i)
+            if len(values) > 0:
+                p1, p99 = np.percentile(values, [1, 99])
+                values_clipped = values[(values >= p1) & (values <= p99)]
+                if len(values_clipped) > 0:
+                    ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
+                           label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+        
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Cell: {feature_name}", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"cell_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
+    
+    print(f"  Saved {n_features} cell feature plots")
 
 
 def plot_decay_mode_features(data, output_dir):
-    """Plot feature distributions by detailed decay mode (for tau jets only)."""
+    """Plot individual feature distributions by detailed decay mode (for tau jets only)."""
     print("\nPlotting features by detailed decay mode (tau jets only)...")
     
     clusters = data["clusters"]
@@ -234,15 +270,11 @@ def plot_decay_mode_features(data, output_dir):
     
     # Plot cluster features by detailed decay mode
     n_features = clusters.shape[2]
-    n_cols = 3
-    n_rows = (n_features + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
-    axes = axes.flatten()
     
     for i in range(n_features):
-        ax = axes[i]
         feature_name = CLUSTER_FEATURE_NAMES[i] if i < len(CLUSTER_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         for dm in range(5):  # 0-4
             mask = tau_decay == dm
@@ -255,31 +287,25 @@ def plot_decay_mode_features(data, output_dir):
                 ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
                        label=DECAY_MODE_NAMES[dm], color=DECAY_MODE_COLORS[dm])
         
-        ax.set_xlabel(feature_name)
-        ax.set_ylabel("Density")
-        ax.legend(fontsize=8)
-        ax.set_title(f"Cluster: {feature_name}")
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Tau Cluster: {feature_name} (by Decay Mode)", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"cluster_by_decay_mode_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
     
-    for i in range(n_features, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle("Tau Cluster Features by Detailed Decay Mode", fontsize=14, y=1.02)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "cluster_features_by_decay_mode.png"), dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved cluster_features_by_decay_mode.png")
+    print(f"  Saved {n_features} cluster feature decay mode plots")
     
     # Plot track features by detailed decay mode
     n_features = NUM_TRACK_FEATURES
-    n_cols = 4
-    n_rows = (n_features + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
-    axes = axes.flatten()
     
     for i in range(n_features):
-        ax = axes[i]
         feature_name = TRACK_FEATURE_NAMES[i] if i < len(TRACK_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         for dm in range(5):  # 0-4
             mask = tau_decay == dm
@@ -293,19 +319,67 @@ def plot_decay_mode_features(data, output_dir):
                     ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
                            label=DECAY_MODE_NAMES[dm], color=DECAY_MODE_COLORS[dm])
         
-        ax.set_xlabel(feature_name)
-        ax.set_ylabel("Density")
-        ax.legend(fontsize=6)
-        ax.set_title(f"Track: {feature_name}", fontsize=10)
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Tau Track: {feature_name} (by Decay Mode)", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"track_by_decay_mode_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
     
-    for i in range(n_features, len(axes)):
-        axes[i].set_visible(False)
+    print(f"  Saved {n_features} track feature decay mode plots")
+
+
+def plot_cell_features_by_decay_mode(data, output_dir):
+    """Plot individual cell feature distributions by decay mode (for tau jets only)."""
+    print("\nPlotting cell features by detailed decay mode (tau jets only)...")
     
-    plt.suptitle("Tau Track Features by Detailed Decay Mode", fontsize=14, y=1.02)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "track_features_by_decay_mode.png"), dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved track_features_by_decay_mode.png")
+    cells = data["cells"]
+    pid = data["pid"]
+    decay_mode = data["decay_mode"]
+    
+    # Select tau jets with valid decay mode
+    tau_mask = (pid == 1) & (decay_mode >= 0)
+    
+    if tau_mask.sum() == 0:
+        print("  No tau jets with valid decay mode found, skipping...")
+        return
+    
+    tau_cells = cells[tau_mask]
+    tau_decay = decay_mode[tau_mask]
+    
+    n_features = NUM_CELL_FEATURES
+    
+    for i in range(n_features):
+        feature_name = CELL_FEATURE_NAMES[i] if i < len(CELL_FEATURE_NAMES) else f"Feature {i}"
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        for dm in range(5):  # 0-4
+            mask = tau_decay == dm
+            if mask.sum() == 0:
+                continue
+            values = get_valid_cell_values(tau_cells[mask], i)
+            if len(values) > 0:
+                p1, p99 = np.percentile(values, [1, 99])
+                values_clipped = values[(values >= p1) & (values <= p99)]
+                if len(values_clipped) > 0:
+                    ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
+                           label=DECAY_MODE_NAMES[dm], color=DECAY_MODE_COLORS[dm])
+        
+        ax.set_xlabel(feature_name, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.set_title(f"Tau Cell: {feature_name} (by Decay Mode)", fontsize=13)
+        
+        plt.tight_layout()
+        safe_name = feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+        plt.savefig(os.path.join(output_dir, f"cell_by_decay_mode_{safe_name}.png"), dpi=150, bbox_inches="tight")
+        plt.close()
+    
+    print(f"  Saved {n_features} cell feature decay mode plots")
 
 
 def plot_summary_stats(data, output_dir):
@@ -314,10 +388,11 @@ def plot_summary_stats(data, output_dir):
     
     clusters = data["clusters"]
     tracks = data["tracks"]
+    cells = data["cells"]
     pid = data["pid"]
     decay_mode = data["decay_mode"]
     
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
     
     # Class distribution
     ax = axes[0, 0]
@@ -342,10 +417,20 @@ def plot_summary_stats(data, output_dir):
     for bar, count in zip(bars, dm_counts + [na_count]):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{count}',
                 ha='center', va='bottom', fontsize=10)
+
+    # Truth label distribution (all jets)
+    ax = axes[0, 2]
+    truth_counts = [np.sum(pid == i) for i in range(3)]
+    bars = ax.bar(list(CLASS_NAMES.values()), truth_counts, color=list(CLASS_COLORS.values()))
+    ax.set_ylabel("Number of Jets")
+    ax.set_title("Truth Label Distribution")
+    for bar, count in zip(bars, truth_counts):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{count}',
+                ha='center', va='bottom', fontsize=10)
     
     # Number of valid clusters per jet
     ax = axes[1, 0]
-    n_clusters = (clusters[:, :, 2] != 0).sum(axis=1)
+    n_clusters = (clusters[:, :, 0] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
         mask = pid == class_id
         ax.hist(n_clusters[mask], bins=range(0, 22), alpha=0.5, density=True,
@@ -358,7 +443,7 @@ def plot_summary_stats(data, output_dir):
     # Number of valid tracks per jet
     ax = axes[1, 1]
     reshaped = tracks.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
-    n_tracks = (reshaped[:, :, 2] != 0).sum(axis=1)
+    n_tracks = (reshaped[:, :, 1] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
         mask = pid == class_id
         ax.hist(n_tracks[mask], bins=range(0, 22), alpha=0.5, density=True,
@@ -366,6 +451,18 @@ def plot_summary_stats(data, output_dir):
     ax.set_xlabel("Number of Tracks")
     ax.set_ylabel("Density")
     ax.set_title("Tracks per Jet")
+    ax.legend()
+
+    # Number of valid cells per jet
+    ax = axes[1, 2]
+    n_cells = (cells[:, :, 0] != 0).sum(axis=1)
+    for class_id in [0, 1, 2]:
+        mask = pid == class_id
+        ax.hist(n_cells[mask], bins=range(0, 52), alpha=0.5, density=True,
+               label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+    ax.set_xlabel("Number of Cells")
+    ax.set_ylabel("Density")
+    ax.set_title("Cells per Jet")
     ax.legend()
     
     plt.tight_layout()
@@ -430,34 +527,54 @@ def plot_2d_correlations(data, output_dir):
     print("\nPlotting 2D correlations...")
     
     clusters = data["clusters"]
+    cells = data["cells"]
     pid = data["pid"]
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
     
-    # dEta vs dPhi for each class
+    # Cluster Eta vs Phi for each class
     for idx, class_id in enumerate([0, 1, 2]):
-        ax = axes[idx]
+        ax = axes[0, idx]
         mask = pid == class_id
-        deta = get_valid_cluster_values(clusters[mask], 0)
-        dphi = get_valid_cluster_values(clusters[mask], 1)
+        eta = get_valid_cluster_values(clusters[mask], 2)
+        phi = get_valid_cluster_values(clusters[mask], 3)
         
         # Sample if too many points
-        if len(deta) > 50000:
-            sample_idx = np.random.choice(len(deta), 50000, replace=False)
-            deta = deta[sample_idx]
-            dphi = dphi[sample_idx]
+        if len(eta) > 50000:
+            sample_idx = np.random.choice(len(eta), 50000, replace=False)
+            eta = eta[sample_idx]
+            phi = phi[sample_idx]
         
-        ax.hexbin(deta, dphi, gridsize=50, cmap='Blues', mincnt=1)
-        ax.set_xlabel("Δη")
-        ax.set_ylabel("Δφ")
+        ax.hexbin(eta, phi, gridsize=50, cmap='Blues', mincnt=1)
+        ax.set_xlabel("Eta")
+        ax.set_ylabel("Phi")
         ax.set_title(f"{CLASS_NAMES[class_id]} Cluster Positions")
+        ax.set_xlim(-0.5, 0.5)
+        ax.set_ylim(-0.5, 0.5)
+
+    # Cell Eta vs Phi for each class
+    for idx, class_id in enumerate([0, 1, 2]):
+        ax = axes[1, idx]
+        mask = pid == class_id
+        eta = get_valid_cell_values(cells[mask], 2)
+        phi = get_valid_cell_values(cells[mask], 3)
+
+        if len(eta) > 50000:
+            sample_idx = np.random.choice(len(eta), 50000, replace=False)
+            eta = eta[sample_idx]
+            phi = phi[sample_idx]
+
+        ax.hexbin(eta, phi, gridsize=50, cmap='Greens', mincnt=1)
+        ax.set_xlabel("Eta")
+        ax.set_ylabel("Phi")
+        ax.set_title(f"{CLASS_NAMES[class_id]} Cell Positions")
         ax.set_xlim(-0.5, 0.5)
         ax.set_ylim(-0.5, 0.5)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "cluster_2d_positions.png"), dpi=150, bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "cluster_cell_2d_positions.png"), dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"  Saved cluster_2d_positions.png")
+    print(f"  Saved cluster_cell_2d_positions.png")
 
 
 def main():
@@ -478,8 +595,10 @@ def main():
     plot_summary_stats(data, args.output)
     plot_cluster_features(data, args.output)
     plot_track_features(data, args.output)
+    plot_cell_features(data, args.output)
     plot_regression_targets(data, args.output)
     plot_decay_mode_features(data, args.output)
+    plot_cell_features_by_decay_mode(data, args.output)
     plot_2d_correlations(data, args.output)
     
     print(f"\nAll plots saved to {args.output}")

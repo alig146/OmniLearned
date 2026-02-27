@@ -25,9 +25,9 @@ from tqdm import tqdm
 
 
 # Configuration
-MAX_CLUSTERS = 15
-MAX_TRACKS = 10
-MAX_CELLS = 20
+MAX_CLUSTERS = 20
+MAX_TRACKS = 20
+MAX_CELLS = 500
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -112,6 +112,7 @@ NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
 NUM_CELL_FEATURES = len(CELL_BRANCHES)
 
+# TODO: these guys need to actually be saved
 OTHER_BRANCHES = [
     "truth_label",
     "truth_pt",
@@ -287,9 +288,11 @@ def process_file(filepath, label):
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare HDF5 datasets for OmniLearned")
-    parser.add_argument("--input_dir", type=str, default="/global/homes/a/agarabag/pscratch/OmniLearned/samples",
+    parser.add_argument("--input_dir", type=str, 
+                        default="/pscratch/sd/m/milescb/OmniTau/OmniLearnedData/ntuples/",
                         help="Directory containing ROOT files")
-    parser.add_argument("--output_dir", type=str, default="/global/homes/a/agarabag/pscratch/OmniLearned/datasets/tau",
+    parser.add_argument("--output_dir", type=str, 
+                        default="/pscratch/sd/m/milescb/OmniTau/OmniLearnedData/training_data",
                         help="Directory to save HDF5 files")
     parser.add_argument("--train_frac", type=float, default=0.6)
     parser.add_argument("--val_frac", type=float, default=0.2)
@@ -298,9 +301,12 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     files_and_labels = [
-        (os.path.join(args.input_dir, "user.nkyriaco.48808733.EXT0._000245.ntuple.root"), 1),
-        #(os.path.join(args.input_dir, "Gammatautau.root"), 1),
-        #(os.path.join(args.input_dir, "Gammaee.root"), 2),
+        (os.path.join(args.input_dir, 
+                      "user.agarabag.mc23_13p6TeV.801168.JZ3_EXT0/user.agarabag.48791986.EXT0._001000.ntuple.root"), 0),
+        (os.path.join(args.input_dir, 
+                      "user.nkyriaco.Gammatautau.Ntuple_02_25_26_Prod4_EXT0/user.nkyriaco.48846280.EXT0._000010.ntuple.root"), 1),
+        (os.path.join(args.input_dir, 
+                      "user.nkyriaco.Gammaee.Ntuple_02_24_26_Prod3_EXT0/user.nkyriaco.48808733.EXT0._000001.ntuple.root"), 2),
     ]
     
     all_data = []
