@@ -384,7 +384,120 @@ def analyze_electron_vs_qcd(data, true_labels, output_dir):
     return auc_evq
 
 
-def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None):
+def analyze_regression_task(data, output_dir):
+    """Analyze regression auxiliary tasks."""
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+    # Find all regression task predictions
+    regression_tasks = {}
+    for key in data.keys():
+        print(key)
+        if key.startswith('aux_') and key.endswith('_pred'):
+            task_name = key.replace('aux_', '').replace('_pred', '')
+            # Check if it's likely a regression task (1D output)
+            if data[key].ndim == 1 or data[key].shape[1] == 1:
+                regression_tasks[task_name] = data[key].flatten()
+
+    if not regression_tasks:
+        print("\nNo regression auxiliary predictions found.")
+        return {}
+
+    print("\n" + "=" * 60)
+    print("AUXILIARY REGRESSION TASKS")
+    print("=" * 60)
+
+    results = {}
+
+    for task_name, predictions in regression_tasks.items():
+        # Look for corresponding ground truth
+        truth_key = f"aux_{task_name}_true"
+        if truth_key not in data.keys():
+            print(f"\nWarning: No ground truth found for {task_name}, skipping.")
+            continue
+
+        ground_truth = data[truth_key].flatten()
+
+        if len(predictions) != len(ground_truth):
+            print(f"\nWarning: Shape mismatch for {task_name}, skipping.")
+            continue
+
+        # Calculate metrics
+        mae = mean_absolute_error(ground_truth, predictions)
+        mse = mean_squared_error(ground_truth, predictions)
+        rmse = np.sqrt(mse)
+        correlation = np.corrcoef(ground_truth, predictions)[0, 1]
+
+        # R-squared
+        ss_res = np.sum((ground_truth - predictions) ** 2)
+        ss_tot = np.sum((ground_truth - np.mean(ground_truth)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+
+        print(f"\n{task_name.upper()}:")
+        print(f"  MAE:           {mae:.6f}")
+        print(f"  RMSE:          {rmse:.6f}")
+        print(f"  Correlation:   {correlation:.4f}")
+        print(f"  R²:            {r_squared:.4f}")
+
+        results[task_name] = {
+            'mae': mae,
+            'rmse': rmse,
+            'correlation': correlation,
+            'r_squared': r_squared,
+        }
+
+        # Create plots
+        _plot_regression_task(ground_truth, predictions, task_name, output_dir)
+
+    return results
+
+
+def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
+    """Plot regression task predictions vs ground truth."""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Prediction vs Ground Truth
+    axes[0, 0].scatter(ground_truth, predictions, alpha=0.5, s=10)
+    min_val = min(ground_truth.min(), predictions.min())
+    max_val = max(ground_truth.max(), predictions.max())
+    axes[0, 0].plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect prediction')
+    axes[0, 0].set_xlabel('Ground Truth')
+    axes[0, 0].set_ylabel('Prediction')
+    axes[0, 0].set_title(f'{task_name}: Prediction vs Ground Truth')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Residuals
+    residuals = predictions - ground_truth
+    axes[0, 1].scatter(ground_truth, residuals, alpha=0.5, s=10)
+    axes[0, 1].axhline(y=0, color='r', linestyle='--', lw=2)
+    axes[0, 1].set_xlabel('Ground Truth')
+    axes[0, 1].set_ylabel('Residuals')
+    axes[0, 1].set_title(f'{task_name}: Residual Plot')
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Residual Distribution
+    axes[1, 0].hist(residuals, bins=50, alpha=0.7, edgecolor='black')
+    axes[1, 0].set_xlabel('Residuals')
+    axes[1, 0].set_ylabel('Frequency')
+    axes[1, 0].set_title(f'{task_name}: Residual Distribution')
+    axes[1, 0].axvline(x=0, color='r', linestyle='--', lw=2)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Distribution comparison
+    # axes[1, 1].hist(ground_truth, bins=50, alpha=0.6, label='Ground Truth', density=True)
+    axes[1, 1].hist(predictions, bins=50, alpha=0.6, label='Predictions', density=True)
+    axes[1, 1].set_xlabel(f'{task_name} Value')
+    axes[1, 1].set_ylabel('Density')
+    axes[1, 1].set_title(f'{task_name}: Distribution Comparison')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/{task_name}_regression.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regression_results=None):
     """Print final summary of all tasks."""
     print("\n" + "=" * 60)
     print("MULTI-TASK LEARNING SUMMARY")
@@ -401,6 +514,13 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None):
     if evq_auc is not None:
         print("\n[AUXILIARY TASK 2] Electron vs QCD")
         print(f"  AUC: {evq_auc:.4f}")
+
+    if regression_results:
+        for task_name, metrics in regression_results.items():
+            print(f"\n[AUXILIARY TASK] {task_name.upper()} (Regression)")
+            print(f"  MAE:  {metrics['mae']:.6f}")
+            print(f"  RMSE: {metrics['rmse']:.6f}")
+            print(f"  R²:   {metrics['r_squared']:.4f}")
 
     print("\n" + "=" * 60)
 
@@ -436,9 +556,10 @@ def main(results_path="results/outputs__tau_0.npz", output_dir="results"):
     # Auxiliary tasks
     dm_accuracy = analyze_decay_mode(data, true_labels, output_dir)
     evq_auc = analyze_electron_vs_qcd(data, true_labels, output_dir)
+    regression_results = analyze_regression_task(data, output_dir)
 
     # Summary
-    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc)
+    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results)
 
     print(f"\nAll plots saved to: {output_dir}")
 
