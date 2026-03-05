@@ -36,8 +36,14 @@ CLUSTER_BRANCHES = [
     ("cls_ET", "cls_ET", True),                  # Feature 3: E_{T}
     ("cls_Eta", "cls_Eta", False),           # Feature 0: η
     ("cls_Phi", "cls_Phi", False),           # Feature 1: φ
+    ("cls_dEta", "cls_dEta", False),           # Feature 0: η
+    ("cls_dPhi", "cls_dPhi", False),           # Feature 1: φ
     ("cls_FIRST_ENG_DENS", "cls_FIRST_ENG_DENS", False),
-
+    ("cls_SECOND_R", "cls_SECOND_R", False),
+    ("cls_EM_PROBABILITY", "cls_EM_PROBABILITY", False),
+    ("cls_SECOND_LAMBDA", "cls_SECOND_LAMBDA", False),
+    ("cls_CENTER_LAMBDA", "cls_CENTER_LAMBDA", False),
+    ("cls_CENTER_MAG", "cls_CENTER_MAG", False),
 #### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
     #("cls_SECOND_R", "TauClusters.cls_SECOND_R", False),
     #("cls_SECOND_LAMBDA", "TauClusters.cls_SECOND_LAMBDA", False),
@@ -53,7 +59,8 @@ TRACK_BRANCHES = [
     ("trk_pT", "trk_pT", True),
     ("trk_Eta", "trk_Eta", False),
     ("trk_Phi", "trk_Phi", False),
-    #("trk_eProbNN", "trk_eProbNN", False), # We should not use this anyway, but eventually if we have samples we should
+    ("trk_dEta", "trk_dEta", False),
+    ("trk_dPhi", "trk_dPhi", False),    #("trk_eProbNN", "trk_eProbNN", False), # We should not use this anyway, but eventually if we have samples we should
     ("trk_charge", "trk_charge", False),
     ("trk_d0", "trk_d0", False),
     ("trk_z0", "trk_z0", False),
@@ -96,8 +103,8 @@ CELL_BRANCHES = [
     ("cell_ET", "cell_ET", True),
     ("cell_Eta", "cell_Eta", False),
     ("cell_Phi", "cell_Phi", False),
-    ("cell_Eta", "cell_Eta", False),
-    ("cell_Phi", "cell_Phi", False),
+    ("cell_dEta", "cell_dEta", False),
+    ("cell_dPhi", "cell_dPhi", False),
     ("cell_sintheta", "cell_sintheta", False),
     ("cell_costheta", "cell_costheta", False),
     ("cell_sinphi", "cell_sinphi", False),
@@ -248,7 +255,7 @@ def process_file(filepath, label):
                         if apply_log:
                             values = safe_log(values)
                         all_tracks[jet_counter, :n, feat_idx] = values
-
+                        
             # =========================================
             # CELLS (point cloud 3)
             # =========================================
@@ -281,7 +288,18 @@ def process_file(filepath, label):
             all_decay_mode[jet_counter] =int(decay_mode[jet_idx]) if label == 1 else -1             
             
             jet_counter += 1
-    
+
+    print("Type of all_tracks: {}, with shape: {}".format(type(all_tracks), all_tracks.shape))
+    print("Type of all_clusters: {}, with shape: {}".format(type(all_data), all_data.shape))
+    print("Type of all_cells: {}, with shape: {}".format(type(all_cells), all_cells.shape))
+    cls_E_idx = 0  # Index of "cls_E" in CLS_BRANCHES
+    sort_indices = np.argsort(-all_data[:, :, cls_E_idx], axis=1)
+    all_data = np.take_along_axis(all_data, sort_indices[:, :, np.newaxis], axis=1)
+    all_cells = np.take_along_axis(all_cells, sort_indices[:, :, np.newaxis], axis=1) # Also sort the cells along the same indices as the clusters were sorted
+    trk_pt_idx = 1  # Index of "trk_pt" in TRACK_BRANCHES
+    sort_indices = np.argsort(-all_tracks[:, :, trk_pt_idx], axis=1)
+    all_tracks = np.take_along_axis(all_tracks, sort_indices[:, :, np.newaxis], axis=1)      
+
     print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, cells={all_cells.shape}")
     return all_data, all_tracks, all_cells, all_pid, all_decay_mode
 
@@ -300,14 +318,61 @@ def main():
     
     os.makedirs(args.output_dir, exist_ok=True)
     
-    files_and_labels = [
-        (os.path.join(args.input_dir, 
-                      "user.agarabag.mc23_13p6TeV.801168.JZ3_EXT0/user.agarabag.48791986.EXT0._001000.ntuple.root"), 0),
-        (os.path.join(args.input_dir, 
-                      "user.nkyriaco.Gammatautau.Ntuple_02_25_26_Prod4_EXT0/user.nkyriaco.48846280.EXT0._000010.ntuple.root"), 1),
-        (os.path.join(args.input_dir, 
-                      "user.nkyriaco.Gammaee.Ntuple_02_24_26_Prod3_EXT0/user.nkyriaco.48808733.EXT0._000001.ntuple.root"), 2),
+    # JZ2 files (label 0)
+    jz2_files = [
+        "user.nkyriaco.48954090.EXT0._000005.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000247.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000256.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000542.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000806.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000932.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._001252.ntuple.root",
     ]
+    
+    # Gammatautau files (label 1)
+    gammatautau_files = [
+        "user.nkyriaco.48954085.EXT0._000050.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000116.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000307.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000406.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000433.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000595.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000690.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000751.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000906.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000923.ntuple.root",
+    ]
+    
+    # Gammaee files (label 2)
+    gammaee_files = [
+        "user.nkyriaco.48954086.EXT0._000004.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000022.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000050.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000053.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000058.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000062.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000078.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000100.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000101.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000167.ntuple.root",
+    ]
+    
+    files_and_labels = []
+    
+    # Add JZ2 files with label 0
+    for fname in jz2_files:
+        files_and_labels.append((os.path.join(args.input_dir, 
+                                              "user.nkyriaco.JZ2.Ntuple_03_03_26_Prod1_EXT0", fname), 0))
+    
+    # Add Gammatautau files with label 1
+    for fname in gammatautau_files:
+        files_and_labels.append((os.path.join(args.input_dir, 
+                                              "user.nkyriaco.Gammatautau.Ntuple_03_03_26_Prod1_EXT0", fname), 1))
+    
+    # Add Gammaee files with label 2
+    for fname in gammaee_files:
+        files_and_labels.append((os.path.join(args.input_dir, 
+                                              "user.nkyriaco.Gammaee.Ntuple_03_03_26_Prod1_EXT0", fname), 2))
     
     all_data = []
     all_tracks = []
