@@ -13,16 +13,25 @@ import os
 
 # Feature names matching prepare_data.py
 CLUSTER_FEATURE_NAMES = [
-    "cls_E (log)",
+    "cls_dEta",
+    "cls_dPhi",
     "cls_ET (log)",
+    "cls_E (log)",
     "cls_Eta",
     "cls_Phi",
     "cls_FIRST_ENG_DENS",
+    "cls_SECOND_R",
+    "cls_EM_PROBABILITY",
+    "cls_SECOND_LAMBDA",
+    "cls_CENTER_LAMBDA",
+    "cls_CENTER_MAG",
 ]
 
 TRACK_FEATURE_NAMES = [
-    "trk_E (log)",
+    "trk_dEta",
+    "trk_dPhi",
     "trk_pT (log)",
+    "trk_E (log)",
     "trk_Eta",
     "trk_Phi",
     "trk_charge",
@@ -37,12 +46,12 @@ TRACK_FEATURE_NAMES = [
 ]
 
 CELL_FEATURE_NAMES = [
-    "cell_E (log)",
+    "cell_dEta",
+    "cell_dPhi",
     "cell_ET (log)",
+    "cell_E (log)",
     "cell_Eta",
     "cell_Phi",
-    "cell_Eta_dup",
-    "cell_Phi_dup",
     "cell_sintheta",
     "cell_costheta",
     "cell_sinphi",
@@ -62,7 +71,7 @@ CLASS_COLORS = {0: "#e41a1c", 1: "#377eb8", 2: "#4daf4a"}
 DECAY_MODE_NAMES = {0: "1p0n", 1: "1p1n", 2: "1pXn", 3: "3p0n", 4: "3pXn"}
 DECAY_MODE_COLORS = {0: "#e41a1c", 1: "#377eb8", 2: "#4daf4a", 3: "#984ea3", 4: "#ff7f00"}
 
-MAX_TRACKS = 20
+MAX_TRACKS = 15
 MAX_CELLS = 500
 NUM_TRACK_FEATURES = len(TRACK_FEATURE_NAMES)
 NUM_CELL_FEATURES = len(CELL_FEATURE_NAMES)
@@ -93,22 +102,22 @@ def load_data(filepath):
 
 def get_valid_cluster_values(clusters, feature_idx):
     """Extract non-zero (valid) cluster values for a feature."""
-    # Clusters are zero-padded; use feature 0 (cls_E) to find valid entries
-    valid_mask = clusters[:, :, 0] != 0
+    # Clusters are zero-padded; use feature 3 (cls_E) to find valid entries
+    valid_mask = clusters[:, :, 3] != 0
     values = clusters[:, :, feature_idx][valid_mask]
     return values
 
 def get_valid_cell_values(cells, feature_idx):
     """Extract non-zero (valid) cell values for a feature."""
-    # Cells are zero-padded; use feature 0 (cell_E) to find valid entries
-    valid_mask = cells[:, :, 0] != 0
+    # Cells are zero-padded; use feature 3 (cell_E) to find valid entries
+    valid_mask = cells[:, :, 3] != 0
     values = cells[:, :, feature_idx][valid_mask]
     return values
 
 def get_valid_target_values(targets, target_idx):
     """Extract non-zero (valid) target values for a regression target."""
-    # target values are zero-padded; use feature 0 (log E) to find valid entries
-    valid_mask = targets[:, :, 0] != 0
+    # target values are zero-padded; use feature 3 (log E) to find valid entries
+    valid_mask = targets[:, :, 3] != 0
     values = targets[:, :, target_idx][valid_mask]
     return values
 
@@ -124,8 +133,8 @@ def get_all_track_values(tracks, feature_idx):
     """Get all non-zero track values for a feature across all tracks."""
     n_jets = tracks.shape[0]
     reshaped = tracks.reshape(n_jets, MAX_TRACKS, NUM_TRACK_FEATURES)
-    # Use feature 1 (log trackPt) to identify valid tracks
-    valid_mask = reshaped[:, :, 1] != 0
+    # Use feature 2 (trk_pT log) to identify valid tracks
+    valid_mask = reshaped[:, :, 2] != 0
     values = reshaped[:, :, feature_idx][valid_mask]
     return values
 
@@ -430,10 +439,10 @@ def plot_summary_stats(data, output_dir):
     
     # Number of valid clusters per jet
     ax = axes[1, 0]
-    n_clusters = (clusters[:, :, 0] != 0).sum(axis=1)
+    n_clusters = (clusters[:, :, 3] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
         mask = pid == class_id
-        ax.hist(n_clusters[mask], bins=range(0, 22), alpha=0.5, density=True,
+        ax.hist(n_clusters[mask], bins=range(0, 16), alpha=0.5, density=True,
                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     ax.set_xlabel("Number of Clusters")
     ax.set_ylabel("Density")
@@ -443,10 +452,10 @@ def plot_summary_stats(data, output_dir):
     # Number of valid tracks per jet
     ax = axes[1, 1]
     reshaped = tracks.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
-    n_tracks = (reshaped[:, :, 1] != 0).sum(axis=1)
+    n_tracks = (reshaped[:, :, 3] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
         mask = pid == class_id
-        ax.hist(n_tracks[mask], bins=range(0, 22), alpha=0.5, density=True,
+        ax.hist(n_tracks[mask], bins=range(0, 16), alpha=0.5, density=True,
                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     ax.set_xlabel("Number of Tracks")
     ax.set_ylabel("Density")
@@ -455,10 +464,10 @@ def plot_summary_stats(data, output_dir):
 
     # Number of valid cells per jet
     ax = axes[1, 2]
-    n_cells = (cells[:, :, 0] != 0).sum(axis=1)
+    n_cells = (cells[:, :, 3] != 0).sum(axis=1)
     for class_id in [0, 1, 2]:
         mask = pid == class_id
-        ax.hist(n_cells[mask], bins=range(0, 52), alpha=0.5, density=True,
+        ax.hist(n_cells[mask], bins=np.arange(0, 501, 10), alpha=0.5, density=True,
                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     ax.set_xlabel("Number of Cells")
     ax.set_ylabel("Density")
@@ -536,8 +545,8 @@ def plot_2d_correlations(data, output_dir):
     for idx, class_id in enumerate([0, 1, 2]):
         ax = axes[0, idx]
         mask = pid == class_id
-        eta = get_valid_cluster_values(clusters[mask], 2)
-        phi = get_valid_cluster_values(clusters[mask], 3)
+        eta = get_valid_cluster_values(clusters[mask], 4)
+        phi = get_valid_cluster_values(clusters[mask], 5)
         
         # Sample if too many points
         if len(eta) > 50000:
@@ -556,8 +565,8 @@ def plot_2d_correlations(data, output_dir):
     for idx, class_id in enumerate([0, 1, 2]):
         ax = axes[1, idx]
         mask = pid == class_id
-        eta = get_valid_cell_values(cells[mask], 2)
-        phi = get_valid_cell_values(cells[mask], 3)
+        eta = get_valid_cell_values(cells[mask], 4)
+        phi = get_valid_cell_values(cells[mask], 5)
 
         if len(eta) > 50000:
             sample_idx = np.random.choice(len(eta), 50000, replace=False)
