@@ -25,19 +25,19 @@ from tqdm import tqdm
 
 
 # Configuration
-MAX_CLUSTERS = 20
-MAX_TRACKS = 20
+MAX_CLUSTERS = 15
+MAX_TRACKS = 15
 MAX_CELLS = 500
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
 CLUSTER_BRANCHES = [
-    ("cls_E", "cls_E", True),                # Feature 2: E
-    ("cls_ET", "cls_ET", True),                  # Feature 3: E_{T}
-    ("cls_Eta", "cls_Eta", False),           # Feature 0: η
-    ("cls_Phi", "cls_Phi", False),           # Feature 1: φ
     ("cls_dEta", "cls_dEta", False),           # Feature 0: η
     ("cls_dPhi", "cls_dPhi", False),           # Feature 1: φ
+    ("cls_ET", "cls_ET", True),                  # Feature 3: E_{T}
+    ("cls_E", "cls_E", True),                # Feature 2: E
+    ("cls_Eta", "cls_Eta", False),           # Feature 0: η
+    ("cls_Phi", "cls_Phi", False),           # Feature 1: φ
     ("cls_FIRST_ENG_DENS", "cls_FIRST_ENG_DENS", False),
     ("cls_SECOND_R", "cls_SECOND_R", False),
     ("cls_EM_PROBABILITY", "cls_EM_PROBABILITY", False),
@@ -54,13 +54,12 @@ CLUSTER_BRANCHES = [
 
 # Track branches (all features, will be flattened into global)
 TRACK_BRANCHES = [
-
-    ("trk_E", "trk_E", True),
-    ("trk_pT", "trk_pT", True),
-    ("trk_Eta", "trk_Eta", False),
-    ("trk_Phi", "trk_Phi", False),
     ("trk_dEta", "trk_dEta", False),
     ("trk_dPhi", "trk_dPhi", False),    #("trk_eProbNN", "trk_eProbNN", False), # We should not use this anyway, but eventually if we have samples we should
+    ("trk_pT", "trk_pT", True),
+    ("trk_E", "trk_E", True),
+    ("trk_Eta", "trk_Eta", False),
+    ("trk_Phi", "trk_Phi", False),
     ("trk_charge", "trk_charge", False),
     ("trk_d0", "trk_d0", False),
     ("trk_z0", "trk_z0", False),
@@ -99,12 +98,12 @@ TRACK_BRANCHES = [
 
 
 CELL_BRANCHES = [
-    ("cell_E", "cell_E", True),
-    ("cell_ET", "cell_ET", True),
-    ("cell_Eta", "cell_Eta", False),
-    ("cell_Phi", "cell_Phi", False),
     ("cell_dEta", "cell_dEta", False),
     ("cell_dPhi", "cell_dPhi", False),
+    ("cell_ET", "cell_ET", True),
+    ("cell_E", "cell_E", True),
+    ("cell_Eta", "cell_Eta", False),
+    ("cell_Phi", "cell_Phi", False),
     ("cell_sintheta", "cell_sintheta", False),
     ("cell_costheta", "cell_costheta", False),
     ("cell_sinphi", "cell_sinphi", False),
@@ -142,6 +141,134 @@ def safe_log(arr, epsilon=1e-8):
     """Apply log transformation safely."""
     arr = np.array(arr, dtype=np.float32)
     return np.log(np.maximum(arr, epsilon))
+
+
+def _is_sequence_like(values):
+    """Return True if values behaves like a sequence (list/array/awkward list)."""
+    try:
+        len(values)
+        return True
+    except TypeError:
+        return False
+
+
+def _get_jet_values(event_values, jet_idx, n_jets):
+    """Get per-jet values from branches that may be per-event or per-jet nested."""
+    if not _is_sequence_like(event_values):
+        return [event_values] if jet_idx == 0 else []
+
+    # Common in these ntuples: one jet per event, and branch already stores
+    # the full object list for that event (e.g. clusters/cells/tracks).
+    if n_jets == 1 and len(event_values) > 0:
+        first_item = event_values[0]
+        if not _is_sequence_like(first_item):
+            return event_values
+
+    if len(event_values) <= jet_idx:
+        return []
+
+    jet_values = event_values[jet_idx]
+    if _is_sequence_like(jet_values):
+        return jet_values
+
+    return [jet_values]
+
+
+def _fill_point_cloud_features(
+    output_for_jet,
+    feature_specs,
+    event_feature_arrays,
+    jet_idx,
+    n_jets,
+    max_items,
+    reorder_indices=None,
+):
+    """Fill a single jet point-cloud tensor from feature specs and event data."""
+    for feat_idx, (feat_name, _, apply_log) in enumerate(feature_specs):
+        jet_values = _get_jet_values(event_feature_arrays[feat_name], jet_idx, n_jets)
+        n_values = len(jet_values)
+        if n_values == 0:
+            continue
+
+        values = np.asarray(ak.to_numpy(jet_values), dtype=np.float32)
+        if reorder_indices is not None and len(reorder_indices) > 0:
+            valid_idx = reorder_indices[reorder_indices < len(values)]
+            if len(valid_idx) > 0:
+                values = values[valid_idx]
+
+        n = min(len(values), max_items)
+        values = values[:n]
+        if apply_log:
+            values = safe_log(values)
+        output_for_jet[:n, feat_idx] = values
+
+
+def _get_jet_cell_values(event_values, jet_idx, n_jets, cluster_sort_indices):
+    """Get flattened per-jet cell values from branches stored as cells-per-cluster."""
+    if not _is_sequence_like(event_values):
+        return [event_values] if jet_idx == 0 else []
+
+    # In these ntuples, cells are often stored for one jet/event as
+    # [cluster0_cells, cluster1_cells, ...]. Keep full event content for n_jets==1.
+    if n_jets == 1:
+        jet_cells_by_cluster = event_values
+    else:
+        if len(event_values) <= jet_idx:
+            return []
+        jet_cells_by_cluster = event_values[jet_idx]
+
+    if not _is_sequence_like(jet_cells_by_cluster) or len(jet_cells_by_cluster) == 0:
+        return []
+
+    first_item = jet_cells_by_cluster[0]
+    if not _is_sequence_like(first_item):
+        # Already flat cells for this jet.
+        return jet_cells_by_cluster
+
+    clusters_as_lists = [list(cluster_cells) for cluster_cells in jet_cells_by_cluster]
+
+    if cluster_sort_indices is not None and len(cluster_sort_indices) > 0:
+        ordered_clusters = [
+            clusters_as_lists[idx]
+            for idx in cluster_sort_indices
+            if idx < len(clusters_as_lists)
+        ]
+    else:
+        ordered_clusters = clusters_as_lists
+
+    # Flatten cluster->cells into one jet-level cell sequence.
+    flattened = []
+    for cluster_cells in ordered_clusters:
+        flattened.extend(cluster_cells)
+    return flattened
+
+
+def _fill_cell_features(
+    output_for_jet,
+    feature_specs,
+    event_feature_arrays,
+    jet_idx,
+    n_jets,
+    max_items,
+    cluster_sort_indices,
+):
+    """Fill cell features for a jet, flattening cells-per-cluster after cluster reordering."""
+    for feat_idx, (feat_name, _, apply_log) in enumerate(feature_specs):
+        jet_cells = _get_jet_cell_values(
+            event_feature_arrays[feat_name],
+            jet_idx,
+            n_jets,
+            cluster_sort_indices,
+        )
+        if len(jet_cells) == 0:
+            continue
+
+        values = np.asarray(ak.to_numpy(jet_cells), dtype=np.float32)
+        n = min(len(values), max_items)
+        values = values[:n]
+        if apply_log:
+            values = safe_log(values)
+        output_for_jet[:n, feat_idx] = values
 
 
 def process_file(filepath, label):
@@ -202,7 +329,7 @@ def process_file(filepath, label):
         # Get track data
         track_arrays = {}
         for feat_name, branch_name, _ in TRACK_BRANCHES:
-            track_arrays[feat_name] = [events[branch_name][evt_idx]]
+            track_arrays[feat_name] = events[branch_name][evt_idx]
         
         # Get cell data
         cell_arrays = {}
@@ -212,71 +339,41 @@ def process_file(filepath, label):
         decay_mode = events["truth_decayMode"][evt_idx]
         
         for jet_idx in range(n_jets):
-            # =========================================
-            # CLUSTERS (point cloud 1)
-            # =========================================
-            for feat_idx, (feat_name, _, apply_log) in enumerate(CLUSTER_BRANCHES):
-                event_clusters = cluster_arrays[feat_name]
-                if len(event_clusters) > jet_idx:
-                    jet_clusters = event_clusters[jet_idx]
-                    # Check if jet_clusters is an array or scalar
-                    try:
-                        cluster_len = len(jet_clusters)
-                    except TypeError:
-                        # It's a scalar, treat as single value
-                        cluster_len = 1
-                        jet_clusters = [jet_clusters]
-                    
-                    if cluster_len > 0:
-                        n = min(cluster_len, MAX_CLUSTERS)
-                        values = ak.to_numpy(jet_clusters[:n]) if not isinstance(jet_clusters, list) else np.array(jet_clusters[:n])
-                        if apply_log:
-                            values = safe_log(values)
-                        all_data[jet_counter, :n, feat_idx] = values
+            # Sort clusters per jet by cls_E descending and reuse this order for cells.
+            jet_cluster_energy = _get_jet_values(cluster_arrays["cls_E"], jet_idx, n_jets)
+            if len(jet_cluster_energy) > 0:
+                cluster_energy = np.asarray(ak.to_numpy(jet_cluster_energy), dtype=np.float32)
+                cluster_sort_indices = np.argsort(-cluster_energy)
+            else:
+                cluster_sort_indices = np.array([], dtype=np.int64)
 
-            # =========================================
-            # TRACKS (point cloud 2 - NOT flattened)
-            # =========================================
-            for feat_idx, (feat_name, _, apply_log) in enumerate(TRACK_BRANCHES):
-                event_tracks = track_arrays[feat_name]
-                if len(event_tracks) > jet_idx:
-                    jet_tracks = event_tracks[jet_idx]
-                    # Check if jet_tracks is an array or scalar
-                    try:
-                        track_len = len(jet_tracks)
-                    except TypeError:
-                        # It's a scalar, treat as single value
-                        track_len = 1
-                        jet_tracks = [jet_tracks]
-                    
-                    if track_len > 0:
-                        n = min(track_len, MAX_TRACKS)
-                        values = jet_tracks[:n] if not isinstance(jet_tracks, list) else np.array(jet_tracks[:n])
-                        if apply_log:
-                            values = safe_log(values)
-                        all_tracks[jet_counter, :n, feat_idx] = values
-                        
-            # =========================================
-            # CELLS (point cloud 3)
-            # =========================================
-            for feat_idx, (feat_name, _, apply_log) in enumerate(CELL_BRANCHES):
-                event_cells = cell_arrays[feat_name]
-                if len(event_cells) > jet_idx:
-                    jet_cells = event_cells[jet_idx]
-                    # Check if jet_cells is an array or scalar
-                    try:
-                        cell_len = len(jet_cells)
-                    except TypeError:
-                        # It's a scalar, treat as single value
-                        cell_len = 1
-                        jet_cells = [jet_cells]
-                    
-                    if cell_len > 0:
-                        n = min(cell_len, MAX_CELLS)
-                        values = ak.to_numpy(jet_cells[:n]) if not isinstance(jet_cells, list) else np.array(jet_cells[:n])
-                        if apply_log:
-                            values = safe_log(values)
-                        all_cells[jet_counter, :n, feat_idx] = values
+            # Fill all point-clouds with shared logic.
+            _fill_point_cloud_features(
+                all_data[jet_counter],
+                CLUSTER_BRANCHES,
+                cluster_arrays,
+                jet_idx,
+                n_jets,
+                MAX_CLUSTERS,
+                reorder_indices=cluster_sort_indices,
+            )
+            _fill_point_cloud_features(
+                all_tracks[jet_counter],
+                TRACK_BRANCHES,
+                track_arrays,
+                jet_idx,
+                n_jets,
+                MAX_TRACKS,
+            )
+            _fill_cell_features(
+                all_cells[jet_counter],
+                CELL_BRANCHES,
+                cell_arrays,
+                jet_idx,
+                n_jets,
+                MAX_CELLS,
+                cluster_sort_indices,
+            )
 
             # Decay mode (only for tau)
             #if label == 1:
@@ -292,10 +389,7 @@ def process_file(filepath, label):
     print("Type of all_tracks: {}, with shape: {}".format(type(all_tracks), all_tracks.shape))
     print("Type of all_clusters: {}, with shape: {}".format(type(all_data), all_data.shape))
     print("Type of all_cells: {}, with shape: {}".format(type(all_cells), all_cells.shape))
-    cls_E_idx = 0  # Index of "cls_E" in CLS_BRANCHES
-    sort_indices = np.argsort(-all_data[:, :, cls_E_idx], axis=1)
-    all_data = np.take_along_axis(all_data, sort_indices[:, :, np.newaxis], axis=1)
-    all_cells = np.take_along_axis(all_cells, sort_indices[:, :, np.newaxis], axis=1) # Also sort the cells along the same indices as the clusters were sorted
+    # Clusters and cells are already filled in per-jet cluster-sorted order.
     trk_pt_idx = 1  # Index of "trk_pt" in TRACK_BRANCHES
     sort_indices = np.argsort(-all_tracks[:, :, trk_pt_idx], axis=1)
     all_tracks = np.take_along_axis(all_tracks, sort_indices[:, :, np.newaxis], axis=1)      
@@ -321,40 +415,40 @@ def main():
     # JZ2 files (label 0)
     jz2_files = [
         "user.nkyriaco.48954090.EXT0._000005.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._000247.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._000256.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._000542.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._000806.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._000932.ntuple.root",
-        "user.nkyriaco.48954090.EXT0._001252.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._000247.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._000256.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._000542.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._000806.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._000932.ntuple.root",
+        #"user.nkyriaco.48954090.EXT0._001252.ntuple.root",
     ]
     
     # Gammatautau files (label 1)
     gammatautau_files = [
         "user.nkyriaco.48954085.EXT0._000050.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000116.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000307.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000406.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000433.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000595.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000690.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000751.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000906.ntuple.root",
-        "user.nkyriaco.48954085.EXT0._000923.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000116.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000307.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000406.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000433.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000595.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000690.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000751.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000906.ntuple.root",
+        #"user.nkyriaco.48954085.EXT0._000923.ntuple.root",
     ]
     
     # Gammaee files (label 2)
     gammaee_files = [
         "user.nkyriaco.48954086.EXT0._000004.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000022.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000050.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000053.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000058.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000062.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000078.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000100.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000101.ntuple.root",
-        "user.nkyriaco.48954086.EXT0._000167.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000022.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000050.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000053.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000058.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000062.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000078.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000100.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000101.ntuple.root",
+        #"user.nkyriaco.48954086.EXT0._000167.ntuple.root",
     ]
     
     files_and_labels = []
