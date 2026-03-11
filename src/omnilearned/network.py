@@ -45,7 +45,7 @@ class PET2(nn.Module):
         K=15,
         skip=False,
         num_coord=3,
-        aux_tasks=None,  # Auxiliary tasks: [{"name": "decay_mode", "num_classes": 2}, ...]
+        aux_tasks=None,  # Auxiliary tasks: [{"name": "decay_mode", "num_classes": 7}, ...]
         use_tracks=False,  # Option B: tracks as separate tokens
         track_dim=24,      # Number of track features
     ):
@@ -217,7 +217,7 @@ class PET_classifier(nn.Module):
         num_tokens=4,
         num_classes=2,
         # Auxiliary task configurations
-        aux_tasks=None,  # List of dicts: [{"name": "decay_mode", "num_classes": 2}, ...]
+        aux_tasks=None,  # List of dicts: [{"name": "decay_mode", "num_classes": 7}, ...]
     ):
         super().__init__()
         self.num_tokens = num_tokens

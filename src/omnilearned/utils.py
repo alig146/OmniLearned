@@ -302,12 +302,14 @@ def get_loss(
                     continue
                 aux_pred = aux_pred[task_mask]
                 task_labels = task_labels[task_mask]
-                # Filter out invalid labels (e.g., -1)
-                valid = task_labels >= 0
-                if not valid.any():
-                    continue
-                aux_pred = aux_pred[valid]
-                task_labels = task_labels[valid]
+
+            # Filter out invalid labels (e.g., -1 or Error=7) and out-of-range labels
+            num_classes_task = aux_pred.shape[-1]
+            valid = (task_labels >= 0) & (task_labels < num_classes_task)
+            if not valid.any():
+                continue
+            aux_pred = aux_pred[valid]
+            task_labels = task_labels[valid]
 
             loss_aux = torch.mean(class_cost(aux_pred, task_labels))
             logs[f"loss_{task_name}"] = logs.get(f"loss_{task_name}", 0.0) + loss_aux.detach()

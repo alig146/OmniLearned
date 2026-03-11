@@ -408,7 +408,7 @@ def run(
     num_workers: int = 16,
     clip_inputs: bool = False,
     # Auxiliary tasks: comma-separated "name:num_classes" pairs
-    # e.g., "decay_mode:2,electron_label:2"
+    # e.g., "decay_mode:7,electron_vs_qcd:2"
     aux_tasks_str: str = "",
     # Option B: Tracks as separate tokens
     use_tracks: bool = False,

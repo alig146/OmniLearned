@@ -8,7 +8,7 @@ Primary task (2-class): Tau vs QCD only. Class 0=QCD, 1=Tau.
 Electron jets are excluded from primary metrics.
 
 Auxiliary tasks: 
-- decay_mode (5-class: 1p0n, 1p1n, 1pXn, 3p0n, 3pXn)
+- decay_mode (7-class: 1p0n, 1p1n, 1pXn, 3p0n, 3pXn, Other, NotSet)
 - electron_vs_qcd (QCD vs Electron)
 """
 
@@ -209,8 +209,11 @@ def plot_score_distributions(predictions, true_labels, class_names, output_dir):
 def plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_names, output_dir):
     """Plot score distributions for each decay mode class."""
     print("Plotting decay mode score distributions...")
-    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    n_classes = len(prong_names)
+    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'][:n_classes]
+    ncols = 4
+    nrows = (n_classes + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
     axes = axes.flatten()
 
     for i, (name, color) in enumerate(zip(prong_names, colors_dm)):
@@ -219,72 +222,76 @@ def plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_name
 
         for j, (true_name, true_color) in enumerate(zip(prong_names, colors_dm)):
             mask = dm_true_valid == j
-            ax.hist(score[mask], bins=50, alpha=0.5, label=f'True {true_name}',
-                    color=true_color, density=True)
+            if mask.any():
+                ax.hist(score[mask], bins=50, alpha=0.5, label=f'True {true_name}',
+                        color=true_color, density=True)
 
         ax.set_xlabel(f'{name} Score')
         ax.set_ylabel('Density')
         ax.set_title(f'{name} Score Distribution')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=7)
         ax.set_xlim([0, 1])
 
-    fig.delaxes(axes[5])
+    for i in range(n_classes, len(axes)):
+        fig.delaxes(axes[i])
     plt.tight_layout()
     plt.savefig(f'{output_dir}/decay_mode_score_distributions.png', dpi=150, bbox_inches='tight')
     plt.close()
 
 
 def analyze_decay_mode(data, true_labels, output_dir):
-    """Analyze 5-class decay mode predictions."""
+    """Analyze 7-class decay mode predictions."""
     if 'aux_decay_mode_pred' not in data.keys():
         print("\nNo auxiliary decay_mode predictions found.")
         return None
 
     print("\n" + "=" * 60)
-    print("AUXILIARY TASK 1: Decay Mode (5-class)")
+    print("AUXILIARY TASK 1: Decay Mode (7-class)")
     print("=" * 60)
 
     decay_mode_pred = data['aux_decay_mode_pred']
     decay_mode_true = data['decay_mode']
+    n_classes = decay_mode_pred.shape[-1]
 
     tau_mask = true_labels == 1
-    valid_mask = tau_mask & (decay_mode_true >= 0)
+    valid_mask = tau_mask & (decay_mode_true >= 0) & (decay_mode_true < n_classes)
 
     print(f"\nTotal tau jets: {tau_mask.sum()}")
-    print(f"Tau jets with valid decay mode: {valid_mask.sum()}")
+    print(f"Tau jets with valid decay mode (0-{n_classes-1}): {valid_mask.sum()}")
 
     dm_pred_valid = decay_mode_pred[valid_mask]
     dm_true_valid = decay_mode_true[valid_mask]
     dm_pred_labels = np.argmax(dm_pred_valid, axis=1)
 
-    prong_names = ['1p0n', '1p1n', '1pXn', '3p0n', '3pXn']
+    prong_names = ['1p0n', '1p1n', '1pXn', '3p0n', '3pXn', 'Other', 'NotSet'][:n_classes]
 
     print("\nDecay mode distribution:")
     for i, name in enumerate(prong_names):
         count = (dm_true_valid == i).sum()
         print(f"  {name}: {count}")
 
-    # Accuracy
     dm_accuracy = accuracy_score(dm_true_valid, dm_pred_labels)
     print(f"\nDecay Mode Accuracy: {dm_accuracy:.4f} ({dm_accuracy*100:.2f}%)")
 
-    # Classification report
     print("\nDecay Mode Classification Report:")
-    print(classification_report(dm_true_valid, dm_pred_labels, target_names=prong_names, digits=4))
+    present_labels = sorted(set(dm_true_valid) | set(dm_pred_labels))
+    present_names = [prong_names[i] for i in present_labels if i < len(prong_names)]
+    print(classification_report(dm_true_valid, dm_pred_labels,
+                                labels=present_labels, target_names=present_names, digits=4))
 
-    # Score distributions
     plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_names, output_dir)
 
-    # Confusion matrix
     print("Plotting decay mode confusion matrices...")
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(max(12, 2 * n_classes), max(5, n_classes)))
 
-    cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels)
+    cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels, labels=list(range(n_classes)))
     disp1 = ConfusionMatrixDisplay(cm_dm, display_labels=prong_names)
     disp1.plot(ax=axes[0], cmap='Oranges', values_format='d')
     axes[0].set_title('Decay Mode Confusion Matrix (Counts)')
 
-    cm_dm_norm = cm_dm.astype('float') / cm_dm.sum(axis=1)[:, np.newaxis]
+    row_sums = cm_dm.sum(axis=1)[:, np.newaxis]
+    cm_dm_norm = np.divide(cm_dm.astype('float'), row_sums, where=row_sums != 0,
+                           out=np.zeros_like(cm_dm, dtype=float))
     disp2 = ConfusionMatrixDisplay(cm_dm_norm, display_labels=prong_names)
     disp2.plot(ax=axes[1], cmap='Oranges', values_format='.3f')
     axes[1].set_title('Decay Mode Confusion Matrix (Normalized)')
@@ -293,16 +300,21 @@ def analyze_decay_mode(data, true_labels, output_dir):
     plt.savefig(f'{output_dir}/decay_mode_confusion.png', dpi=150, bbox_inches='tight')
     plt.close()
 
-    # ROC curves for each decay mode
     print("Plotting decay mode ROC curves...")
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'][:n_classes]
+    ncols = 4
+    nrows = (n_classes + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
     axes = axes.flatten()
-
-    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
     print("\nDecay Mode AUC (one-vs-rest):")
     for i, (name, color) in enumerate(zip(prong_names, colors_dm)):
         y_true_binary = (dm_true_valid == i).astype(int)
+        if y_true_binary.sum() == 0 or y_true_binary.sum() == len(y_true_binary):
+            axes[i].text(0.5, 0.5, f'No data for {name}', ha='center', va='center',
+                         transform=axes[i].transAxes)
+            print(f"  {name}: N/A (no samples)")
+            continue
         y_score = dm_pred_valid[:, i]
 
         fpr_dm, tpr_dm, _ = roc_curve(y_true_binary, y_score)
@@ -319,7 +331,8 @@ def analyze_decay_mode(data, true_labels, output_dir):
 
         print(f"  {name}: {auc_dm:.4f}")
 
-    fig.delaxes(axes[5])
+    for i in range(n_classes, len(axes)):
+        fig.delaxes(axes[i])
     plt.tight_layout()
     plt.savefig(f'{output_dir}/decay_mode_roc.png', dpi=150, bbox_inches='tight')
     plt.close()
@@ -508,7 +521,7 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regr
     print(f"  Tau vs QCD AUC: {tau_vs_qcd_auc:.4f}")
 
     if dm_accuracy is not None:
-        print("\n[AUXILIARY TASK 1] Decay Mode (5-class)")
+        print("\n[AUXILIARY TASK 1] Decay Mode (7-class)")
         print(f"  Accuracy: {dm_accuracy:.4f}")
 
     if evq_auc is not None:
