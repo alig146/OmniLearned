@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from pytorch_optimizer import Lion
 from diffusers.optimization import get_cosine_schedule_with_warmup
+from tqdm import tqdm
 
 from omnilearned.utils import (
     is_master_node,
@@ -58,6 +59,7 @@ def train_step(
     gscaler=None,
     ema_model=None,
     ema_decay=0.9999,
+    epoch_index: int | None = None,
 ):
     model.train()
 
@@ -66,14 +68,36 @@ def train_step(
     if iterations_per_epoch < 0:
         iterations_per_epoch = len(dataloader)
 
-    data_iter = iter(dataloader)
+    base_model = model.module if hasattr(model, "module") else model
 
-    for batch_idx in range(iterations_per_epoch):
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(dataloader)
-            batch = next(data_iter)
+    dataloader_len = len(dataloader)
+    if dataloader_len == 0:
+        raise ValueError("Training dataloader is empty.")
+
+    cached_batch = None
+    data_iter = None
+    if dataloader_len == 1 and iterations_per_epoch > 1:
+        cached_batch = next(iter(dataloader))
+    else:
+        data_iter = iter(dataloader)
+
+    if is_master_node():
+        desc = "Train"
+        if epoch_index is not None:
+            desc = f"Train epoch {epoch_index + 1}"
+        iterator = tqdm(range(iterations_per_epoch), desc=desc, leave=False)
+    else:
+        iterator = range(iterations_per_epoch)
+
+    for batch_idx in iterator:
+        if cached_batch is not None:
+            batch = cached_batch
+        else:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(dataloader)
+                batch = next(data_iter)
 
         # for batch_idx, batch in enumerate(dataloader):
         optimizer.zero_grad()  # Zero the gradients
@@ -133,12 +157,13 @@ def train_step(
             loss.backward()  # Backward pass
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()  # Update parameters
+
         scheduler.step()
 
         if ema_model is not None:
             with torch.no_grad():
                 for ema_p, model_p in zip(
-                    ema_model.parameters(), model.module.parameters()
+                    ema_model.parameters(), base_model.parameters()
                 ):
                     ema_p.mul_(ema_decay).add_(model_p, alpha=1.0 - ema_decay)
 
@@ -161,6 +186,7 @@ def val_step(
     use_clip=False,
     use_event_loss=False,
     iterations_per_epoch=-1,
+    epoch_index: int | None = None,
 ):
     model.eval()
 
@@ -169,13 +195,34 @@ def val_step(
     if iterations_per_epoch < 0:
         iterations_per_epoch = len(dataloader)
 
-    data_iter = iter(dataloader)
-    for batch_idx in range(iterations_per_epoch):
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(dataloader)
-            batch = next(data_iter)
+    dataloader_len = len(dataloader)
+    if dataloader_len == 0:
+        raise ValueError("Validation dataloader is empty.")
+
+    cached_batch = None
+    data_iter = None
+    if dataloader_len == 1 and iterations_per_epoch > 1:
+        cached_batch = next(iter(dataloader))
+    else:
+        data_iter = iter(dataloader)
+
+    if is_master_node():
+        desc = "Val"
+        if epoch_index is not None:
+            desc = f"Val epoch {epoch_index + 1}"
+        iterator = tqdm(range(iterations_per_epoch), desc=desc, leave=False)
+    else:
+        iterator = range(iterations_per_epoch)
+
+    for batch_idx in iterator:
+        if cached_batch is not None:
+            batch = cached_batch
+        else:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(dataloader)
+                batch = next(data_iter)
 
         # for batch_idx, batch in enumerate(dataloader):
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
@@ -287,6 +334,7 @@ def train_model(
             gscaler=gscaler,
             ema_model=ema_model,
             ema_decay=ema_decay,
+            epoch_index=epoch,
         )
         val_logs = val_step(
             model,
@@ -298,6 +346,7 @@ def train_model(
             use_clip=use_clip,
             use_event_loss=use_event_loss,
             iterations_per_epoch=iterations_per_epoch,
+            epoch_index=epoch,
         )
 
         losses["train_loss"].append(train_logs["loss"])
@@ -535,6 +584,7 @@ def run(
             optimizer=optimizer,
             num_warmup_steps=train_steps * warmup_epoch,
             num_training_steps=(train_steps * epoch),
+            last_epoch=-1,
         )
 
     # Transfer model to GPU if available
@@ -547,14 +597,16 @@ def run(
         model.cpu()
         device = "cpu"
 
-    model = DDP(
-        model,
-        find_unused_parameters=True,  # Required for auxiliary tasks with conditional masking
-        **kwarg,
-    )
+    if size > 1:
+        model = DDP(
+            model,
+            find_unused_parameters=False,
+            **kwarg,
+        )
 
     # Set up EMA model
-    ema_model = shadow_copy(model.module)
+    base_model = model.module if hasattr(model, "module") else model
+    ema_model = shadow_copy(base_model)
 
     epoch_init = 0
     loss_init = np.inf

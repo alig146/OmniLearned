@@ -329,22 +329,24 @@ def save_checkpoint(
     checkpoint_dir,
     checkpoint_name,
 ):
+    base_model = model.module if hasattr(model, "module") else model
+
     save_dict = {
-        "body": model.module.body.state_dict(),
+        "body": base_model.body.state_dict(),
         "optimizer": optimizer.state_dict(),
         "epoch": epoch,
         "loss": loss,
         "sched": lr_scheduler.state_dict(),
     }
 
-    if model.module.classifier is not None:
-        save_dict["classifier_head"] = model.module.classifier.state_dict()
+    if base_model.classifier is not None:
+        save_dict["classifier_head"] = base_model.classifier.state_dict()
 
-    if model.module.generator is not None:
-        save_dict["generator_head"] = model.module.generator.state_dict()
+    if base_model.generator is not None:
+        save_dict["generator_head"] = base_model.generator.state_dict()
     if ema_model is not None:
         save_dict["ema_body"] = ema_model.body.state_dict()
-        if model.module.generator is not None:
+        if base_model.generator is not None:
             save_dict["ema_generator"] = ema_model.generator.state_dict()
 
     if not os.path.exists(checkpoint_dir):

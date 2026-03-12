@@ -38,7 +38,6 @@ def collate_point_cloud(batch, max_part=5000):
     # Use validity mask based on feature index 2
     valid_mask = point_clouds[:, :, 2] != 0
     max_particles = min(valid_mask.sum(dim=1).max().item(), max_part)
-    max_particles = point_clouds.shape[1]
 
     # Truncate point clouds
     truncated_X = point_clouds[:, :max_particles, :].contiguous()  # (B, M, F)
@@ -177,15 +176,19 @@ class HEPDataset(Dataset):
             self._file_cache[file_idx] = h5py.File(file_path, "r")
         return self._file_cache[file_idx]
 
-    def __getitem__(self, idx):
-        file_idx, sample_idx = self.file_indices[idx]
-        f = self._get_file(file_idx)
-
+    def _build_sample(
+        self,
+        x,
+        label,
+        cond=None,
+        data_pid=None,
+        decay_mode=None,
+        tracks=None,
+    ):
         sample = {}
 
-        sample["X"] = torch.tensor(f["data"][sample_idx], dtype=torch.float32)
+        sample["X"] = torch.tensor(x, dtype=torch.float32)
         if self.clip_inputs:
-            # Enforce particles to be inside R=0.8 and pT > 0.5 MeV
             mask_part = (torch.hypot(sample["X"][:, 0], sample["X"][:, 1]) < 0.8) & (
                 sample["X"][:, 2] > 0.0
             )
@@ -194,16 +197,15 @@ class HEPDataset(Dataset):
             )
             sample["X"] = sample["X"] * mask_part.unsqueeze(-1).float()
 
-        label = f["pid"][sample_idx]
-
         if self.mode == "regression":
             pid_dtype = torch.float32
         else:
             pid_dtype = torch.int64
 
         sample["y"] = torch.tensor(label - self.label_shift, dtype=pid_dtype)
-        if "global" in f and self.use_cond:
-            sample["cond"] = torch.tensor(f["global"][sample_idx], dtype=torch.float32)
+
+        if cond is not None and self.use_cond:
+            sample["cond"] = torch.tensor(cond, dtype=torch.float32)
 
         if self.use_pid:
             sample["pid"] = sample["X"][:, self.pid_idx].int()
@@ -211,31 +213,80 @@ class HEPDataset(Dataset):
                 (sample["X"][:, : self.pid_idx], sample["X"][:, self.pid_idx + 1 :]),
                 dim=1,
             )
+
         if self.use_add:
-            # Assume any additional info appears last
             sample["add_info"] = sample["X"][:, -self.num_add :]
             sample["X"] = sample["X"][:, : -self.num_add]
 
-        if self.mode in ["segmentation", "ftag"]:
+        if data_pid is not None and self.mode in ["segmentation", "ftag"]:
             if self.mode == "segmentation":
                 data_dtype = torch.float32
-            elif self.mode == "ftag":
+            else:
                 data_dtype = torch.int64
+            sample["data_pid"] = torch.tensor(data_pid, dtype=data_dtype)
 
-            sample["data_pid"] = torch.tensor(
-                f["data_pid"][sample_idx], dtype=data_dtype
-            )
+        if decay_mode is not None:
+            sample["decay_mode"] = torch.tensor(decay_mode, dtype=torch.int64)
 
-        # Auxiliary task labels (if available in data)
-        # decay_mode: 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, -1=N/A
-        if "decay_mode" in f:
-            sample["decay_mode"] = torch.tensor(f["decay_mode"][sample_idx], dtype=torch.int64)
-
-        # Load tracks as separate point cloud (Option B)
-        if self.use_tracks and "tracks" in f:
-            sample["tracks"] = torch.tensor(f["tracks"][sample_idx], dtype=torch.float32)
+        if tracks is not None and self.use_tracks:
+            sample["tracks"] = torch.tensor(tracks, dtype=torch.float32)
 
         return sample
+
+    def __getitem__(self, idx):
+        file_idx, sample_idx = self.file_indices[idx]
+        f = self._get_file(file_idx)
+
+        cond = f["global"][sample_idx] if "global" in f and self.use_cond else None
+        data_pid = f["data_pid"][sample_idx] if self.mode in ["segmentation", "ftag"] else None
+        decay_mode = f["decay_mode"][sample_idx] if "decay_mode" in f else None
+        tracks = f["tracks"][sample_idx] if self.use_tracks and "tracks" in f else None
+
+        return self._build_sample(
+            f["data"][sample_idx],
+            f["pid"][sample_idx],
+            cond=cond,
+            data_pid=data_pid,
+            decay_mode=decay_mode,
+            tracks=tracks,
+        )
+
+    def __getitems__(self, indices):
+        if len(indices) == 0:
+            return []
+
+        samples = [None] * len(indices)
+        by_file = {}
+        for out_pos, dataset_idx in enumerate(indices):
+            file_idx, sample_idx = self.file_indices[dataset_idx]
+            by_file.setdefault(file_idx, []).append((out_pos, sample_idx))
+
+        for file_idx, items in by_file.items():
+            f = self._get_file(file_idx)
+            output_positions = np.array([out_pos for out_pos, _ in items], dtype=np.int64)
+            sample_indices = np.array([sample_idx for _, sample_idx in items], dtype=np.int64)
+            order = np.argsort(sample_indices)
+            sorted_positions = output_positions[order]
+            sorted_sample_indices = sample_indices[order]
+
+            batch_x = f["data"][sorted_sample_indices]
+            batch_y = f["pid"][sorted_sample_indices]
+            batch_cond = f["global"][sorted_sample_indices] if "global" in f and self.use_cond else None
+            batch_data_pid = f["data_pid"][sorted_sample_indices] if self.mode in ["segmentation", "ftag"] else None
+            batch_decay_mode = f["decay_mode"][sorted_sample_indices] if "decay_mode" in f else None
+            batch_tracks = f["tracks"][sorted_sample_indices] if self.use_tracks and "tracks" in f else None
+
+            for batch_pos, out_pos in enumerate(sorted_positions):
+                samples[out_pos] = self._build_sample(
+                    batch_x[batch_pos],
+                    batch_y[batch_pos],
+                    cond=batch_cond[batch_pos] if batch_cond is not None else None,
+                    data_pid=batch_data_pid[batch_pos] if batch_data_pid is not None else None,
+                    decay_mode=batch_decay_mode[batch_pos] if batch_decay_mode is not None else None,
+                    tracks=batch_tracks[batch_pos] if batch_tracks is not None else None,
+                )
+
+        return samples
 
     def __del__(self):
         # Clean up: close all cached file handles.
@@ -385,16 +436,20 @@ def load_data(
         use_tracks=use_tracks,
     )
 
-    loader = DataLoader(
-        data,
-        batch_size=batch,
-        pin_memory=torch.cuda.is_available(),
-        shuffle=shuffle,
-        sampler=None,
-        num_workers=num_workers,
-        drop_last=False,
-        collate_fn=collate_point_cloud,
-    )
+    loader_kwargs = {
+        "dataset": data,
+        "batch_size": batch,
+        "pin_memory": torch.cuda.is_available(),
+        "shuffle": shuffle,
+        "sampler": None,
+        "num_workers": num_workers,
+        "drop_last": False,
+        "collate_fn": collate_point_cloud,
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+
+    loader = DataLoader(**loader_kwargs)
     return loader
 
 
