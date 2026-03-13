@@ -347,14 +347,10 @@ class LocalEmbeddingBlock(nn.Module):
         mask_neighbors = mask_neighbors.view(batch_size * num_points, self.K, 1)
         local_features = local_features.view(batch_size * num_points, self.K, -1)
 
-        attn_mask = mask_neighbors.float() @ mask_neighbors.float().transpose(-1, -2)
-        attn_mask = ~(attn_mask.bool()).repeat_interleave(self.num_heads, dim=0)
-        attn_mask = attn_mask.float() * -1e9
-
         x = self.mlp(local_features) * mask_neighbors
 
         for ib, blk in enumerate(self.in_blocks):
-            x = blk(x, mask=mask_neighbors, attn_mask=attn_mask)
+            x = blk(x, mask=mask_neighbors)
 
         x = x.view((batch_size, num_points, self.K, -1))
         mask_neighbors = mask_neighbors.view((batch_size, num_points, self.K, -1))

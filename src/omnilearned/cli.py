@@ -96,6 +96,9 @@ def train(
     # Option B: Tracks as separate tokens
     use_tracks: bool = typer.Option(False, help="Use tracks as separate tokens (Option B)"),
     track_dim: int = typer.Option(24, help="Number of track features"),
+    # Learned per-cluster cell aggregation
+    use_cells: bool = typer.Option(False, help="Use learned per-cluster cell aggregation"),
+    cell_dim: int = typer.Option(14, help="Number of cell features"),
 ):
     run_training(
         outdir,
@@ -147,6 +150,8 @@ def train(
         aux_tasks_str=aux_tasks_str,
         use_tracks=use_tracks,
         track_dim=track_dim,
+        use_cells=use_cells,
+        cell_dim=cell_dim,
     )
 
 
@@ -261,6 +266,9 @@ def evaluate(
     # Option B: Tracks as separate tokens
     use_tracks: bool = typer.Option(False, help="Use tracks as separate tokens (Option B)"),
     track_dim: int = typer.Option(24, help="Number of track features"),
+    # Learned per-cluster cell aggregation
+    use_cells: bool = typer.Option(False, help="Use learned per-cluster cell aggregation"),
+    cell_dim: int = typer.Option(14, help="Number of cell features"),
 ):
     run_evaluation(
         indir,
@@ -291,6 +299,8 @@ def evaluate(
         aux_tasks_str=aux_tasks_str,
         use_tracks=use_tracks,
         track_dim=track_dim,
+        use_cells=use_cells,
+        cell_dim=cell_dim,
     )
 
 

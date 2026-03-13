@@ -101,7 +101,7 @@ def test_step(
         npart = X.shape[1]
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info", "tracks"]
+            for key in ["cond", "pid", "add_info", "tracks", "cells_per_cluster"]
             if key in batch
         }
 
@@ -195,6 +195,8 @@ def run(
     aux_tasks_str: str = "",
     use_tracks: bool = False,
     track_dim: int = 24,
+    use_cells: bool = False,
+    cell_dim: int = 14,
 ):
     local_rank, rank, size = ddp_setup()
 
@@ -227,6 +229,8 @@ def run(
         aux_tasks=aux_tasks,
         use_tracks=use_tracks,
         track_dim=track_dim,
+        use_cells=use_cells,
+        cell_dim=cell_dim,
         **model_params,
     )
 
@@ -257,6 +261,7 @@ def run(
         clip_inputs=clip_inputs,
         mode=mode,
         use_tracks=use_tracks,
+        use_cells=use_cells,
         shuffle=False,
     )
     if rank == 0:

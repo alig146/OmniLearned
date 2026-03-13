@@ -105,7 +105,7 @@ def train_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info", "tracks"]
+            for key in ["cond", "pid", "add_info", "tracks", "cells_per_cluster"]
             if key in batch
         }
 
@@ -228,7 +228,7 @@ def val_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info", "tracks"]
+            for key in ["cond", "pid", "add_info", "tracks", "cells_per_cluster"]
             if key in batch
         }
 
@@ -462,6 +462,9 @@ def run(
     # Option B: Tracks as separate tokens
     use_tracks: bool = False,
     track_dim: int = 24,
+    # Learned per-cluster cell aggregation
+    use_cells: bool = False,
+    cell_dim: int = 14,
 ):
     local_rank, rank, size = ddp_setup()
 
@@ -497,6 +500,8 @@ def run(
         aux_tasks=aux_tasks,
         use_tracks=use_tracks,
         track_dim=track_dim,
+        use_cells=use_cells,
+        cell_dim=cell_dim,
         **model_params,
     )
 
@@ -528,6 +533,7 @@ def run(
         mode=mode,
         nevts=nevts,
         use_tracks=use_tracks,
+        use_cells=use_cells,
     )
     if rank == 0:
         print("**** Setup ****")
@@ -550,6 +556,7 @@ def run(
         clip_inputs=clip_inputs,
         mode=mode,
         use_tracks=use_tracks,
+        use_cells=use_cells,
     )
 
     param_groups = get_param_groups(

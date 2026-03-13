@@ -31,47 +31,49 @@ def collate_point_cloud(batch, max_part=5000):
     batch_X = [item["X"] for item in batch]
     batch_y = [item["y"] for item in batch]
 
-    # Stack once to avoid repeated slicing
     point_clouds = torch.stack(batch_X)  # (B, N, F)
     labels = torch.stack(batch_y)  # (B, num_classes)
 
-    # Use validity mask based on feature index 2
+    # Truncate to actual max valid particles in this batch (feature index 2 == pT)
     valid_mask = point_clouds[:, :, 2] != 0
     max_particles = min(valid_mask.sum(dim=1).max().item(), max_part)
 
-    # Truncate point clouds
     truncated_X = point_clouds[:, :max_particles, :].contiguous()  # (B, M, F)
     result = {"X": truncated_X, "y": labels}
 
-    # Handle optional fields in a loop to reduce code duplication
-    # Fields that are particle-sequence data and should be truncated
     sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
-    # Fields that are jet-level data and should NOT be truncated
     jet_level_fields = ["cond", "decay_mode"]
-    # Fields that are separate point clouds (like tracks)
+    # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
-    
+    # cells_per_cluster shares the cluster dimension with X and must be truncated
+    cluster_aligned_fields = ["cells_per_cluster"]
+
     for field in sequence_fields:
         if all(field in item for item in batch):
             stacked = torch.stack([item[field] for item in batch])
-            # Truncate if it's sequence-like (i.e., has 2 or more dims)
             if stacked.dim() >= 2 and stacked.shape[1] >= max_particles:
                 stacked = stacked[:, :max_particles].contiguous()
             result[field] = stacked
         else:
             result[field] = None
-    
+
     for field in jet_level_fields:
         if all(field in item for item in batch):
             result[field] = torch.stack([item[field] for item in batch])
         else:
             result[field] = None
-    
-    # Handle tracks as separate point cloud (Option B)
+
     for field in point_cloud_fields:
         if all(field in item for item in batch):
             stacked = torch.stack([item[field] for item in batch])
-            # Keep full track sequence (truncation based on track validity, not cluster count)
+            result[field] = stacked
+        else:
+            result[field] = None
+
+    for field in cluster_aligned_fields:
+        if all(field in item for item in batch):
+            stacked = torch.stack([item[field] for item in batch])
+            stacked = stacked[:, :max_particles].contiguous()
             result[field] = stacked
         else:
             result[field] = None
@@ -138,25 +140,20 @@ class HEPDataset(Dataset):
         clip_inputs=False,
         mode="",
         nevts=-1,
-        use_tracks=False,  # Option B: load tracks as separate point cloud
+        use_tracks=False,
+        use_cells=False,
     ):
-        """
-        Args:
-            file_paths (list): List of file paths.
-            use_pid (bool): Flag to select if PID information is used during training
-            use_add (bool): Flags to select if additional information besides kinematics are used
-            use_tracks (bool): Flag to load tracks as separate point cloud (Option B)
-        """
         self.use_cond = use_cond
         self.use_pid = use_pid
         self.use_add = use_add
         self.use_tracks = use_tracks
+        self.use_cells = use_cells
         self.pid_idx = pid_idx
         self.num_add = num_add
         self.label_shift = label_shift
 
         self.file_paths = file_paths
-        self._file_cache = {}  # lazy cache for open h5py.File handles
+        self._file_cache = {}
         self.file_indices = file_indices
         self.clip_inputs = clip_inputs
         self.mode = mode
@@ -164,16 +161,73 @@ class HEPDataset(Dataset):
         if self.nevts < 0:
             self.nevts = len(self.file_indices)
 
-        # random.shuffle(self.file_indices)  # Shuffle data entries globally
+        self._npy_cache_paths = {}
+        self._prepare_npy_cache()
 
     def __len__(self):
         return min(self.nevts, len(self.file_indices))
 
+    def _required_keys(self):
+        keys = ["data", "pid"]
+        if self.use_cond:
+            keys.append("global")
+        if self.use_tracks:
+            keys.append("tracks")
+        if self.use_cells:
+            keys.append("cells_per_cluster")
+        keys.extend(["decay_mode", "data_pid"])
+        return keys
+
+    def _prepare_npy_cache(self):
+        """One-time conversion of HDF5 datasets to .npy for mmap-based access."""
+        required = self._required_keys()
+        for file_idx, file_path in enumerate(self.file_paths):
+            cache_dir = Path(file_path).parent / "npy_cache"
+            stem = Path(file_path).stem
+
+            with h5py.File(file_path, "r") as f:
+                available = set(f.keys())
+                keys_to_cache = [k for k in required if k in available]
+
+                missing = [
+                    k for k in keys_to_cache
+                    if not (cache_dir / f"{stem}_{k}.npy").exists()
+                ]
+
+                if missing:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    print(f"Building numpy cache for {Path(file_path).name} (one-time)...")
+                    for key in missing:
+                        npy_path = cache_dir / f"{stem}_{key}.npy"
+                        ds = f[key]
+                        out = np.lib.format.open_memmap(
+                            str(npy_path), mode="w+",
+                            dtype=ds.dtype, shape=ds.shape,
+                        )
+                        chunk_size = 10000
+                        for start in range(0, ds.shape[0], chunk_size):
+                            end = min(start + chunk_size, ds.shape[0])
+                            out[start:end] = ds[start:end]
+                        del out
+                        print(f"  Cached {key} {ds.shape}")
+
+            paths = {}
+            for key in keys_to_cache:
+                npy_path = cache_dir / f"{stem}_{key}.npy"
+                if npy_path.exists():
+                    paths[key] = str(npy_path)
+            self._npy_cache_paths[file_idx] = paths
+
     def _get_file(self, file_idx):
-        # Get the file handle from cache; open it if it’s not already open.
         if file_idx not in self._file_cache:
-            file_path = self.file_paths[file_idx]
-            self._file_cache[file_idx] = h5py.File(file_path, "r")
+            if self._npy_cache_paths.get(file_idx):
+                data = {}
+                for key, npy_path in self._npy_cache_paths[file_idx].items():
+                    data[key] = np.load(npy_path, mmap_mode="r")
+                self._file_cache[file_idx] = data
+            else:
+                file_path = self.file_paths[file_idx]
+                self._file_cache[file_idx] = h5py.File(file_path, "r")
         return self._file_cache[file_idx]
 
     def _build_sample(
@@ -184,6 +238,7 @@ class HEPDataset(Dataset):
         data_pid=None,
         decay_mode=None,
         tracks=None,
+        cells_per_cluster=None,
     ):
         sample = {}
 
@@ -197,11 +252,7 @@ class HEPDataset(Dataset):
             )
             sample["X"] = sample["X"] * mask_part.unsqueeze(-1).float()
 
-        if self.mode == "regression":
-            pid_dtype = torch.float32
-        else:
-            pid_dtype = torch.int64
-
+        pid_dtype = torch.float32 if self.mode == "regression" else torch.int64
         sample["y"] = torch.tensor(label - self.label_shift, dtype=pid_dtype)
 
         if cond is not None and self.use_cond:
@@ -219,10 +270,7 @@ class HEPDataset(Dataset):
             sample["X"] = sample["X"][:, : -self.num_add]
 
         if data_pid is not None and self.mode in ["segmentation", "ftag"]:
-            if self.mode == "segmentation":
-                data_dtype = torch.float32
-            else:
-                data_dtype = torch.int64
+            data_dtype = torch.float32 if self.mode == "segmentation" else torch.int64
             sample["data_pid"] = torch.tensor(data_pid, dtype=data_dtype)
 
         if decay_mode is not None:
@@ -230,6 +278,9 @@ class HEPDataset(Dataset):
 
         if tracks is not None and self.use_tracks:
             sample["tracks"] = torch.tensor(tracks, dtype=torch.float32)
+
+        if cells_per_cluster is not None and self.use_cells:
+            sample["cells_per_cluster"] = torch.tensor(cells_per_cluster, dtype=torch.float32)
 
         return sample
 
@@ -241,6 +292,7 @@ class HEPDataset(Dataset):
         data_pid = f["data_pid"][sample_idx] if self.mode in ["segmentation", "ftag"] else None
         decay_mode = f["decay_mode"][sample_idx] if "decay_mode" in f else None
         tracks = f["tracks"][sample_idx] if self.use_tracks and "tracks" in f else None
+        cells = f["cells_per_cluster"][sample_idx] if self.use_cells and "cells_per_cluster" in f else None
 
         return self._build_sample(
             f["data"][sample_idx],
@@ -249,9 +301,11 @@ class HEPDataset(Dataset):
             data_pid=data_pid,
             decay_mode=decay_mode,
             tracks=tracks,
+            cells_per_cluster=cells,
         )
 
     def __getitems__(self, indices):
+        """Batched loading: group by file, sort indices for sequential HDF5 access."""
         if len(indices) == 0:
             return []
 
@@ -263,38 +317,40 @@ class HEPDataset(Dataset):
 
         for file_idx, items in by_file.items():
             f = self._get_file(file_idx)
-            output_positions = np.array([out_pos for out_pos, _ in items], dtype=np.int64)
-            sample_indices = np.array([sample_idx for _, sample_idx in items], dtype=np.int64)
+            output_positions = np.array([p for p, _ in items], dtype=np.int64)
+            sample_indices = np.array([s for _, s in items], dtype=np.int64)
             order = np.argsort(sample_indices)
             sorted_positions = output_positions[order]
-            sorted_sample_indices = sample_indices[order]
+            sorted_indices = sample_indices[order]
 
-            batch_x = f["data"][sorted_sample_indices]
-            batch_y = f["pid"][sorted_sample_indices]
-            batch_cond = f["global"][sorted_sample_indices] if "global" in f and self.use_cond else None
-            batch_data_pid = f["data_pid"][sorted_sample_indices] if self.mode in ["segmentation", "ftag"] else None
-            batch_decay_mode = f["decay_mode"][sorted_sample_indices] if "decay_mode" in f else None
-            batch_tracks = f["tracks"][sorted_sample_indices] if self.use_tracks and "tracks" in f else None
+            batch_x = f["data"][sorted_indices]
+            batch_y = f["pid"][sorted_indices]
+            batch_cond = f["global"][sorted_indices] if "global" in f and self.use_cond else None
+            batch_data_pid = f["data_pid"][sorted_indices] if self.mode in ["segmentation", "ftag"] else None
+            batch_decay = f["decay_mode"][sorted_indices] if "decay_mode" in f else None
+            batch_tracks = f["tracks"][sorted_indices] if self.use_tracks and "tracks" in f else None
+            batch_cells = f["cells_per_cluster"][sorted_indices] if self.use_cells and "cells_per_cluster" in f else None
 
-            for batch_pos, out_pos in enumerate(sorted_positions):
+            for i, out_pos in enumerate(sorted_positions):
                 samples[out_pos] = self._build_sample(
-                    batch_x[batch_pos],
-                    batch_y[batch_pos],
-                    cond=batch_cond[batch_pos] if batch_cond is not None else None,
-                    data_pid=batch_data_pid[batch_pos] if batch_data_pid is not None else None,
-                    decay_mode=batch_decay_mode[batch_pos] if batch_decay_mode is not None else None,
-                    tracks=batch_tracks[batch_pos] if batch_tracks is not None else None,
+                    batch_x[i],
+                    batch_y[i],
+                    cond=batch_cond[i] if batch_cond is not None else None,
+                    data_pid=batch_data_pid[i] if batch_data_pid is not None else None,
+                    decay_mode=batch_decay[i] if batch_decay is not None else None,
+                    tracks=batch_tracks[i] if batch_tracks is not None else None,
+                    cells_per_cluster=batch_cells[i] if batch_cells is not None else None,
                 )
 
         return samples
 
     def __del__(self):
-        # Clean up: close all cached file handles.
         for f in self._file_cache.values():
-            try:
-                f.close()
-            except Exception as e:
-                print(f"Error closing file: {e}")
+            if hasattr(f, "close"):
+                try:
+                    f.close()
+                except Exception:
+                    pass
 
 
 def load_data(
@@ -315,7 +371,8 @@ def load_data(
     mode="",
     shuffle=True,
     nevts=-1,
-    use_tracks=False,  # Option B: load tracks as separate point cloud
+    use_tracks=False,
+    use_cells=False,
 ):
     supported_datasets = [
         "top",
@@ -348,7 +405,7 @@ def load_data(
         "aspen_bsm_ad_sb",
         "aspen_bsm_ad_sr",
         "aspen_bsm_ad_sr_hl",
-        "tau",  # Custom tau dataset
+        "tau",
     ]
     if dataset_name not in supported_datasets:
         raise ValueError(
@@ -412,7 +469,6 @@ def load_data(
             np.save(index_file, np.array(file_indices, dtype=np.int32))
             print(f"Number of events: {len(file_indices)}")
 
-    # Shift labels if they are not used for pretrain
     label_shift = {
         "jetclass": 2,
         "jetclass2": 12,
@@ -434,6 +490,7 @@ def load_data(
         mode=mode,
         nevts=nevts,
         use_tracks=use_tracks,
+        use_cells=use_cells,
     )
 
     loader_kwargs = {

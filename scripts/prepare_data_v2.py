@@ -43,6 +43,7 @@ import shutil
 MAX_CLUSTERS = 15
 MAX_TRACKS = 15
 MAX_CELLS = 500
+MAX_CELLS_PER_CLUSTER = 30
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -333,6 +334,43 @@ def _vectorized_cells(events, cell_specs, max_cells):
     return out
 
 
+def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc, cluster_sort):
+    """Build (N, max_clusters, max_cells_pc, N_features) preserving cluster->cell association.
+
+    Cell branches are doubly ragged: events x clusters x cells.
+    This function keeps the cluster structure intact instead of flattening.
+    """
+    n = len(events)
+    n_feat = len(cell_specs)
+    out = np.zeros((n, max_clusters, max_cells_pc, n_feat), dtype=np.float32)
+
+    for feat_idx, (_, branch_name, apply_log) in enumerate(cell_specs):
+        arr = events[branch_name]
+        ndim = arr.ndim if hasattr(arr, 'ndim') else ak.Array(arr).ndim
+        if ndim < 3:
+            continue
+
+        for evt in range(n):
+            evt_clusters = arr[evt]
+            n_cls = min(len(evt_clusters), max_clusters)
+            for ci in range(n_cls):
+                cells = evt_clusters[ci]
+                nc = min(len(cells), max_cells_pc)
+                if nc > 0:
+                    vals = ak.to_numpy(cells[:nc]).astype(np.float32)
+                    if apply_log:
+                        nz = vals != 0
+                        vals[nz] = np.log(np.maximum(vals[nz], 1e-8))
+                    out[evt, ci, :nc, feat_idx] = vals
+
+    if cluster_sort is not None:
+        idx = cluster_sort[:, :, np.newaxis, np.newaxis]
+        idx = np.broadcast_to(idx, out.shape)
+        out = np.take_along_axis(out, idx, axis=1)
+
+    return out
+
+
 def _process_chunk(events, label, n_events_in_chunk):
     """Vectorized chunk processing — operates on all events at once via awkward/numpy."""
     n_jets_per_event = ak.num(events["truth_label"])
@@ -361,6 +399,10 @@ def _process_chunk(events, label, n_events_in_chunk):
         # Cells — flatten across clusters then pad
         chunk_cells = _vectorized_cells(events, CELL_BRANCHES, MAX_CELLS)
 
+        # Cells per cluster — preserves cluster association (uses pre-sort csort)
+        chunk_cells_pc = _vectorized_cells_per_cluster(
+            events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, csort)
+
         # Labels
         chunk_pid = np.full(total_jets, label, dtype=np.int64)
         dm = events["truth_decayMode"]
@@ -371,12 +413,13 @@ def _process_chunk(events, label, n_events_in_chunk):
         else:
             chunk_decay_mode = np.full(total_jets, -1, dtype=np.int64)
 
-        return chunk_data, chunk_tracks, chunk_cells, chunk_pid, chunk_decay_mode
+        return chunk_data, chunk_tracks, chunk_cells, chunk_cells_pc, chunk_pid, chunk_decay_mode
 
     # --- Fallback: multi-jet events (rare) — loop per event/jet ---
     chunk_data = np.zeros((total_jets, MAX_CLUSTERS, NUM_CLUSTER_FEATURES), dtype=np.float32)
     chunk_tracks = np.zeros((total_jets, MAX_TRACKS, NUM_TRACK_FEATURES), dtype=np.float32)
     chunk_cells = np.zeros((total_jets, MAX_CELLS, NUM_CELL_FEATURES), dtype=np.float32)
+    chunk_cells_pc = np.zeros((total_jets, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES), dtype=np.float32)
     chunk_pid = np.full(total_jets, label, dtype=np.int64)
     chunk_decay_mode = np.full(total_jets, -1, dtype=np.int64)
 
@@ -408,6 +451,29 @@ def _process_chunk(events, label, n_events_in_chunk):
                 chunk_cells[jet_counter], CELL_BRANCHES, cell_arrays,
                 jet_idx, n_jets, MAX_CELLS, cluster_sort_indices,
             )
+
+            # Fill cells_per_cluster: iterate over sorted clusters
+            for sorted_pos, orig_idx in enumerate(cluster_sort_indices[:MAX_CLUSTERS]):
+                for feat_idx, (feat_name, _, apply_log) in enumerate(CELL_BRANCHES):
+                    evt_vals = cell_arrays[feat_name]
+                    if n_jets == 1:
+                        jet_cells = evt_vals
+                    else:
+                        if len(evt_vals) <= jet_idx:
+                            continue
+                        jet_cells = evt_vals[jet_idx]
+                    if not _is_sequence_like(jet_cells) or len(jet_cells) == 0:
+                        continue
+                    first = jet_cells[0]
+                    if _is_sequence_like(first) and orig_idx < len(jet_cells):
+                        cells = jet_cells[orig_idx]
+                        nc = min(len(cells), MAX_CELLS_PER_CLUSTER)
+                        if nc > 0:
+                            vals = np.asarray(ak.to_numpy(cells[:nc]), dtype=np.float32)
+                            if apply_log:
+                                vals = safe_log(vals)
+                            chunk_cells_pc[jet_counter, sorted_pos, :nc, feat_idx] = vals
+
             dm_val = int(decay_mode[jet_idx]) if label == 1 else -1
             chunk_decay_mode[jet_counter] = dm_val if 0 <= dm_val <= 6 else -1
             jet_counter += 1
@@ -416,7 +482,7 @@ def _process_chunk(events, label, n_events_in_chunk):
     sort_indices = np.argsort(-chunk_tracks[:, :, trk_pt_idx], axis=1)
     chunk_tracks = np.take_along_axis(chunk_tracks, sort_indices[:, :, np.newaxis], axis=1)
 
-    return chunk_data, chunk_tracks, chunk_cells, chunk_pid, chunk_decay_mode
+    return chunk_data, chunk_tracks, chunk_cells, chunk_cells_pc, chunk_pid, chunk_decay_mode
 
 
 def process_file(filepath, label, chunk_size="500 MB"):
@@ -464,12 +530,14 @@ def process_file(filepath, label, chunk_size="500 MB"):
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
     all_cells = np.concatenate([r[2] for r in chunk_results], axis=0)
-    all_pid = np.concatenate([r[3] for r in chunk_results], axis=0)
-    all_decay_mode = np.concatenate([r[4] for r in chunk_results], axis=0)
+    all_cells_pc = np.concatenate([r[3] for r in chunk_results], axis=0)
+    all_pid = np.concatenate([r[4] for r in chunk_results], axis=0)
+    all_decay_mode = np.concatenate([r[5] for r in chunk_results], axis=0)
     del chunk_results
 
-    print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, cells={all_cells.shape}")
-    return all_data, all_tracks, all_cells, all_pid, all_decay_mode
+    print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, "
+          f"cells={all_cells.shape}, cells_pc={all_cells_pc.shape}")
+    return all_data, all_tracks, all_cells, all_cells_pc, all_pid, all_decay_mode
 
 
 def _process_file_to_staging(args):
@@ -481,13 +549,14 @@ def _process_file_to_staging(args):
         raise RuntimeError(f"Error processing {filepath}: {e}") from e
     if result is None or result[0] is None:
         return None, 0
-    data, tracks, cells, pid, decay_mode = result
+    data, tracks, cells, cells_pc, pid, decay_mode = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
         hf.create_dataset("data", data=data, compression="gzip")
         hf.create_dataset("tracks", data=tracks, compression="gzip")
         hf.create_dataset("cells", data=cells, compression="gzip")
+        hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
         hf.create_dataset("pid", data=pid)
         hf.create_dataset("decay_mode", data=decay_mode)
     return staging_path, n_jets
@@ -528,40 +597,40 @@ def main():
     # JZ2 files (label 0)
     jz2_files = [
         "user.nkyriaco.48954090.EXT0._000005.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._000247.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._000256.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._000542.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._000806.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._000932.ntuple.root",
-        #"user.nkyriaco.48954090.EXT0._001252.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000247.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000256.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000542.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000806.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._000932.ntuple.root",
+        "user.nkyriaco.48954090.EXT0._001252.ntuple.root",
     ]
     
     # Gammatautau files (label 1)
     gammatautau_files = [
         "user.nkyriaco.48954085.EXT0._000050.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000116.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000307.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000406.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000433.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000595.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000690.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000751.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000906.ntuple.root",
-        #"user.nkyriaco.48954085.EXT0._000923.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000116.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000307.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000406.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000433.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000595.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000690.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000751.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000906.ntuple.root",
+        "user.nkyriaco.48954085.EXT0._000923.ntuple.root",
     ]
     
     # Gammaee files (label 2)
     gammaee_files = [
         "user.nkyriaco.48954086.EXT0._000004.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000022.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000050.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000053.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000058.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000062.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000078.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000100.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000101.ntuple.root",
-        #"user.nkyriaco.48954086.EXT0._000167.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000022.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000050.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000053.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000058.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000062.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000078.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000100.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000101.ntuple.root",
+        "user.nkyriaco.48954086.EXT0._000167.ntuple.root",
     ]
     
     files_and_labels = []
@@ -667,11 +736,12 @@ def main():
                 data = sf["data"][:]
                 tracks = sf["tracks"][:]
                 cells = sf["cells"][:]
+                cells_pc = sf["cells_per_cluster"][:]
                 pid = sf["pid"][:]
                 decay_mode = sf["decay_mode"][:]
 
             if sample_shapes is None:
-                sample_shapes = (data.shape[1:], tracks.shape[1:], cells.shape[1:])
+                sample_shapes = (data.shape[1:], tracks.shape[1:], cells.shape[1:], cells_pc.shape[1:])
 
             n = len(data)
             r = np.random.random(n)
@@ -682,19 +752,20 @@ def main():
             for split_name, mask in [("train", train_mask), ("val", val_mask), ("test", test_mask)]:
                 if not mask.any():
                     continue
-                d, t, c, p, dm = data[mask], tracks[mask], cells[mask], pid[mask], decay_mode[mask]
+                d, t, c, cpc, p, dm = data[mask], tracks[mask], cells[mask], cells_pc[mask], pid[mask], decay_mode[mask]
                 fp = split_files[split_name]
                 if split_name not in h5_handles:
                     h5_handles[split_name] = h5py.File(fp, "w")
                     h5_handles[split_name].create_dataset("data", data=d, compression="gzip", maxshape=(None,) + d.shape[1:])
                     h5_handles[split_name].create_dataset("tracks", data=t, compression="gzip", maxshape=(None,) + t.shape[1:])
                     h5_handles[split_name].create_dataset("cells", data=c, compression="gzip", maxshape=(None,) + c.shape[1:])
+                    h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc, compression="gzip", maxshape=(None,) + cpc.shape[1:])
                     h5_handles[split_name].create_dataset("pid", data=p, maxshape=(None,))
                     h5_handles[split_name].create_dataset("decay_mode", data=dm, maxshape=(None,))
                     split_offsets[split_name] = len(d)
                 else:
                     hf = h5_handles[split_name]
-                    for ds_name, arr in [("data", d), ("tracks", t), ("cells", c), ("pid", p), ("decay_mode", dm)]:
+                    for ds_name, arr in [("data", d), ("tracks", t), ("cells", c), ("cells_per_cluster", cpc), ("pid", p), ("decay_mode", dm)]:
                         hf[ds_name].resize(split_offsets[split_name] + len(arr), axis=0)
                         hf[ds_name][split_offsets[split_name]:] = arr
                     split_offsets[split_name] += len(d)
@@ -704,13 +775,14 @@ def main():
 
     # Create empty HDF5 for splits that received no data (dataloader expects all splits to exist)
     if sample_shapes is not None:
-        cluster_shp, track_shp, cell_shp = sample_shapes
+        cluster_shp, track_shp, cell_shp, cell_pc_shp = sample_shapes
         for split_name in split_paths:
             if split_name not in h5_handles:
                 with h5py.File(split_files[split_name], "w") as hf:
                     hf.create_dataset("data", shape=(0,) + cluster_shp, maxshape=(None,) + cluster_shp, compression="gzip")
                     hf.create_dataset("tracks", shape=(0,) + track_shp, maxshape=(None,) + track_shp, compression="gzip")
                     hf.create_dataset("cells", shape=(0,) + cell_shp, maxshape=(None,) + cell_shp, compression="gzip")
+                    hf.create_dataset("cells_per_cluster", shape=(0,) + cell_pc_shp, maxshape=(None,) + cell_pc_shp, compression="gzip")
                     hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int64)
                     hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int64)
 
@@ -762,12 +834,15 @@ def main():
     print("="*60)
     with h5py.File(split_files["train"], "r") as f:
         dshape, tshape, cshape = f["data"].shape, f["tracks"].shape, f["cells"].shape
+        cpc_shape = f["cells_per_cluster"].shape
     print(f"\n  data (clusters): (N, {dshape[1]}, {dshape[2]})")
     print(f"    - {MAX_CLUSTERS} clusters x {NUM_CLUSTER_FEATURES} features")
     print(f"    - First 4: dEta, dPhi, log(et), log(e)")
     print(f"\n  tracks: (N, {tshape[1]}, {tshape[2]})")
     print(f"    - {MAX_TRACKS} tracks x {NUM_TRACK_FEATURES} features")
     print(f"    - First 4: dEta, dPhi, log(pt), theta")
+    print(f"\n  cells_per_cluster: (N, {cpc_shape[1]}, {cpc_shape[2]}, {cpc_shape[3]})")
+    print(f"    - {MAX_CLUSTERS} clusters x {MAX_CELLS_PER_CLUSTER} cells x {NUM_CELL_FEATURES} features")
     print(f"\nCluster features ({NUM_CLUSTER_FEATURES}):")
     for i, (name, _, _) in enumerate(CLUSTER_BRANCHES):
         print(f"    {i}: {name}")
@@ -783,6 +858,7 @@ def main():
     print(f"\n  omnilearned train --dataset tau --path datasets \\")
     print(f"    --num-feat {NUM_CLUSTER_FEATURES} --num-classes 3 \\")
     print(f"    --use-tracks --track-dim {NUM_TRACK_FEATURES} \\")
+    print(f"    --use-cells --cell-dim {NUM_CELL_FEATURES} \\")
     print(f"    --aux-tasks-str 'decay_mode:7,electron_vs_qcd:2'")
 
 
