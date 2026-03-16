@@ -492,7 +492,7 @@ class PET_body(nn.Module):
             self.type_embed = nn.Embedding(2, base_dim)
 
         if self.use_cells:
-            self.cell_embed = nn.Sequential(
+            self.cell_encoder = nn.Sequential(
                 MLP(
                     in_features=cell_dim,
                     hidden_features=int(mlp_ratio * base_dim),
@@ -502,23 +502,6 @@ class PET_body(nn.Module):
                 ),
                 NoScaleDropout(feature_drop),
             )
-            self.cell_self_attn = nn.MultiheadAttention(
-                embed_dim=base_dim,
-                num_heads=num_heads,
-                dropout=attn_drop,
-                bias=False,
-                batch_first=True,
-            )
-            self.cell_self_attn_norm = norm_layer(base_dim)
-            self.cell_cross_attn = nn.MultiheadAttention(
-                embed_dim=base_dim,
-                num_heads=num_heads,
-                dropout=attn_drop,
-                bias=False,
-                batch_first=True,
-            )
-            self.cell_cross_attn_norm = norm_layer(base_dim)
-            self.cell_gate = nn.Linear(2 * base_dim, base_dim)
 
         if self.use_time:
             # Time embedding module for diffusion timesteps
@@ -648,38 +631,14 @@ class PET_body(nn.Module):
         # Combine local + global info
         x = x_embed + local_features
 
-        # Learned cell aggregation: self-attn among cells, then cluster cross-attends
+        # Learned cell aggregation: MLP per cell then masked mean pool per cluster
         if cells is not None and self.use_cells:
-            B_c, C_c, K_c, _ = cells.shape
-            cell_mask = cells[:, :, :, 2:3] != 0                # (B, C, K, 1)
-            cell_key_mask = ~cell_mask[:, :, :, 0]              # (B, C, K) bool
-
-            cell_emb = self.cell_embed(cells) * cell_mask       # (B, C, K, D)
-
-            # Reshape to (B*C, K, D) for attention
-            cell_flat = cell_emb.view(B_c * C_c, K_c, -1)
-            cell_key_flat = cell_key_mask.view(B_c * C_c, K_c)
-
-            # Cell self-attention: cells interact within each cluster
-            cell_normed = self.cell_self_attn_norm(cell_flat)
-            cell_flat = cell_flat + self.cell_self_attn(
-                query=cell_normed, key=cell_normed, value=cell_normed,
-                key_padding_mask=cell_key_flat, need_weights=False,
-            )[0] * (~cell_key_flat).unsqueeze(-1).float()
-
-            # Cross-attention: cluster embedding queries its cells
-            cluster_q = x.view(B_c * C_c, 1, -1)               # (B*C, 1, D)
-            cluster_q = self.cell_cross_attn_norm(cluster_q)
-            cell_feat = self.cell_cross_attn(
-                query=cluster_q, key=cell_flat, value=cell_flat,
-                key_padding_mask=cell_key_flat, need_weights=False,
-            )[0].view(B_c, C_c, -1)                             # (B, C, D)
-
-            # Gated fusion
-            gate = torch.sigmoid(self.cell_gate(
-                torch.cat([x, cell_feat], dim=-1)
-            ))
-            x = x + gate * cell_feat * mask
+            cell_mask = cells[:, :, :, 2:3] != 0           # (B, C, K, 1)
+            cell_embedded = self.cell_encoder(cells)        # (B, C, K, base_dim)
+            cell_embedded = cell_embedded * cell_mask
+            denom = cell_mask.sum(dim=2).clamp(min=1)       # (B, C, 1)
+            cell_features = cell_embedded.sum(dim=2) / denom # (B, C, base_dim)
+            x = x + cell_features * mask
 
         # Add classification tokens
 
