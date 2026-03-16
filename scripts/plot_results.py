@@ -89,12 +89,14 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
     # Raw counts
     disp1 = ConfusionMatrixDisplay(cm, display_labels=class_names)
     disp1.plot(ax=axes[0], cmap='Blues', values_format='d')
+    axes[0].grid(False)
     axes[0].set_title('Confusion Matrix (Counts)')
 
     # Normalized (row-wise = recall)
     cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     disp2 = ConfusionMatrixDisplay(cm_norm, display_labels=class_names)
     disp2.plot(ax=axes[1], cmap='Blues', values_format='.3f')
+    axes[1].grid(False)
     axes[1].set_title('Confusion Matrix (Normalized by True Label)')
 
     plt.tight_layout()
@@ -287,6 +289,7 @@ def analyze_decay_mode(data, true_labels, output_dir):
     cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels, labels=list(range(n_classes)))
     disp1 = ConfusionMatrixDisplay(cm_dm, display_labels=prong_names)
     disp1.plot(ax=axes[0], cmap='Oranges', values_format='d')
+    axes[0].grid(False)
     axes[0].set_title('Decay Mode Confusion Matrix (Counts)')
 
     row_sums = cm_dm.sum(axis=1)[:, np.newaxis]
@@ -294,6 +297,7 @@ def analyze_decay_mode(data, true_labels, output_dir):
                            out=np.zeros_like(cm_dm, dtype=float))
     disp2 = ConfusionMatrixDisplay(cm_dm_norm, display_labels=prong_names)
     disp2.plot(ax=axes[1], cmap='Oranges', values_format='.3f')
+    axes[1].grid(False)
     axes[1].set_title('Decay Mode Confusion Matrix (Normalized)')
 
     plt.tight_layout()
@@ -521,7 +525,7 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regr
     print(f"  Tau vs QCD AUC: {tau_vs_qcd_auc:.4f}")
 
     if dm_accuracy is not None:
-        print("\n[AUXILIARY TASK 1] Decay Mode (7-class)")
+        print("\n[AUXILIARY TASK 1] Decay Mode (5-class)")
         print(f"  Accuracy: {dm_accuracy:.4f}")
 
     if evq_auc is not None:
