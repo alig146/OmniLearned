@@ -30,7 +30,6 @@ import shutil
 # Configuration
 MAX_CLUSTERS = 15
 MAX_TRACKS = 15
-MAX_CELLS = 500
 MAX_CELLS_PER_CLUSTER = 30
 
 # Cluster branches (particles in point cloud)
@@ -48,12 +47,6 @@ CLUSTER_BRANCHES = [
     ("cls_SECOND_LAMBDA", "cls_SECOND_LAMBDA", False),
     ("cls_CENTER_LAMBDA", "cls_CENTER_LAMBDA", False),
     ("cls_CENTER_MAG", "cls_CENTER_MAG", False),
-#### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
-    #("cls_SECOND_R", "TauClusters.cls_SECOND_R", False),
-    #("cls_SECOND_LAMBDA", "TauClusters.cls_SECOND_LAMBDA", False),
-    #("cls_EM_PROBABILITY", "TauClusters.cls_EM_PROBABILITY", False),
-    #("cls_CENTER_MAG", "TauClusters.cls_CENTER_MAG", False),
-    #("cls_CENTER_LAMBDA", "TauClusters.cls_CENTER_LAMBDA", False),
 ]
 
 # Track branches (all features, will be flattened into global)
@@ -74,31 +67,6 @@ TRACK_BRANCHES = [
     ("trk_nPixelHits", "trk_nPixelHits", False),
     ("trk_nBLayerHits", "trk_nBLayerHits", False),
 ]
-#### Commenting these out for now. Making a to-do list of everything else to add in the future, but want to get a basic version working first with just the 4 main features.
-#    ("dEta", "TauTracks.dEta", False),
-#    ("dPhi", "TauTracks.dPhi", False),
-#    ("trackPt", "TauTracks.trackPt", True),                # log(pT)
-#    ("theta", "TauTracks.theta", False),
-#    ("numberOfInnermostPixelLayerHits", "TauTracks.numberOfInnermostPixelLayerHits", False),
-#    ("numberOfPixelHits", "TauTracks.numberOfPixelHits", False),
-#    ("numberOfPixelSharedHits", "TauTracks.numberOfPixelSharedHits", False),
-#    ("numberOfPixelDeadSensors", "TauTracks.numberOfPixelDeadSensors", False),
-#    ("numberOfSCTHits", "TauTracks.numberOfSCTHits", False),
-#    ("numberOfSCTSharedHits", "TauTracks.numberOfSCTSharedHits", False),
-#    ("numberOfSCTDeadSensors", "TauTracks.numberOfSCTDeadSensors", False),
-#    ("numberOfTRTHighThresholdHits", "TauTracks.numberOfTRTHighThresholdHits", False),
-#    ("numberOfTRTHits", "TauTracks.numberOfTRTHits", False),
-#    ("nPixHits", "TauTracks.nPixHits", False),
-#    ("nSCTHits", "TauTracks.nSCTHits", False),
-#    ("nSiHits", "TauTracks.nSiHits", False),
-#    ("nIBLHitsAndExp", "TauTracks.nIBLHitsAndExp", False),
-#    ("expectInnermostPixelLayerHit", "TauTracks.expectInnermostPixelLayerHit", False),
-#    ("expectNextToInnermostPixelLayerHit", "TauTracks.expectNextToInnermostPixelLayerHit", False),
-#    ("numberOfContribPixelLayers", "TauTracks.numberOfContribPixelLayers", False),
-#    ("numberOfPixelHoles", "TauTracks.numberOfPixelHoles", False),
-#    ("numberOfSCTHoles", "TauTracks.numberOfSCTHoles", False),
-#    ("d0_old", "TauTracks.d0_old", False),
-#    ("qOverP", "TauTracks.qOverP", False),
 
 
 CELL_BRANCHES = [
@@ -207,74 +175,6 @@ def _fill_point_cloud_features(
         output_for_jet[:n, feat_idx] = values
 
 
-def _get_jet_cell_values(event_values, jet_idx, n_jets, cluster_sort_indices):
-    """Get flattened per-jet cell values from branches stored as cells-per-cluster."""
-    if not _is_sequence_like(event_values):
-        return [event_values] if jet_idx == 0 else []
-
-    # In these ntuples, cells are often stored for one jet/event as
-    # [cluster0_cells, cluster1_cells, ...]. Keep full event content for n_jets==1.
-    if n_jets == 1:
-        jet_cells_by_cluster = event_values
-    else:
-        if len(event_values) <= jet_idx:
-            return []
-        jet_cells_by_cluster = event_values[jet_idx]
-
-    if not _is_sequence_like(jet_cells_by_cluster) or len(jet_cells_by_cluster) == 0:
-        return []
-
-    first_item = jet_cells_by_cluster[0]
-    if not _is_sequence_like(first_item):
-        # Already flat cells for this jet.
-        return jet_cells_by_cluster
-
-    clusters_as_lists = [list(cluster_cells) for cluster_cells in jet_cells_by_cluster]
-
-    if cluster_sort_indices is not None and len(cluster_sort_indices) > 0:
-        ordered_clusters = [
-            clusters_as_lists[idx]
-            for idx in cluster_sort_indices
-            if idx < len(clusters_as_lists)
-        ]
-    else:
-        ordered_clusters = clusters_as_lists
-
-    # Flatten cluster->cells into one jet-level cell sequence.
-    flattened = []
-    for cluster_cells in ordered_clusters:
-        flattened.extend(cluster_cells)
-    return flattened
-
-
-def _fill_cell_features(
-    output_for_jet,
-    feature_specs,
-    event_feature_arrays,
-    jet_idx,
-    n_jets,
-    max_items,
-    cluster_sort_indices,
-):
-    """Fill cell features for a jet, flattening cells-per-cluster after cluster reordering."""
-    for feat_idx, (feat_name, _, apply_log) in enumerate(feature_specs):
-        jet_cells = _get_jet_cell_values(
-            event_feature_arrays[feat_name],
-            jet_idx,
-            n_jets,
-            cluster_sort_indices,
-        )
-        if len(jet_cells) == 0:
-            continue
-
-        values = np.asarray(ak.to_numpy(jet_cells), dtype=np.float32)
-        n = min(len(values), max_items)
-        values = values[:n]
-        if apply_log:
-            values = safe_log(values)
-        output_for_jet[:n, feat_idx] = values
-
-
 def _pad_and_convert(arr, max_items):
     """Pad ragged awkward array to fixed width and convert to numpy float32."""
     padded = ak.fill_none(ak.pad_none(arr, target=max_items, clip=True, axis=-1), 0.0)
@@ -289,32 +189,6 @@ def _vectorized_point_cloud(events, feature_specs, max_items):
     for feat_idx, (_, branch_name, apply_log) in enumerate(feature_specs):
         arr = events[branch_name]
         np_arr = _pad_and_convert(arr, max_items)
-        if apply_log:
-            nonzero = np_arr != 0
-            np_arr[nonzero] = np.log(np.maximum(np_arr[nonzero], 1e-8))
-        out[:, :, feat_idx] = np_arr
-    return out
-
-
-def _vectorized_cells(events, cell_specs, max_cells):
-    """Build (N, max_cells, N_features) from doubly-ragged cell branches.
-
-    Cell branches may be events x clusters x cells (doubly ragged) or events x cells (flat).
-    For doubly-ragged, cells are flattened across clusters (without reordering) then padded.
-    Cluster reordering is skipped in the vectorized path because the cluster counts in
-    cls_E and the cell branches can differ; the cell order matters less than for clusters.
-    """
-    n = len(events)
-    n_feat = len(cell_specs)
-    out = np.zeros((n, max_cells, n_feat), dtype=np.float32)
-    for feat_idx, (_, branch_name, apply_log) in enumerate(cell_specs):
-        arr = events[branch_name]
-        ndim = arr.ndim if hasattr(arr, 'ndim') else ak.Array(arr).ndim
-        if ndim >= 3:
-            flat = ak.flatten(arr, axis=-1)
-        else:
-            flat = arr
-        np_arr = _pad_and_convert(flat, max_cells)
         if apply_log:
             nonzero = np_arr != 0
             np_arr[nonzero] = np.log(np.maximum(np_arr[nonzero], 1e-8))
@@ -384,9 +258,6 @@ def _process_chunk(events, label, n_events_in_chunk):
         tsort = np.argsort(-chunk_tracks[:, :, trk_pt_idx], axis=1)
         chunk_tracks = np.take_along_axis(chunk_tracks, tsort[:, :, np.newaxis], axis=1)
 
-        # Cells — flatten across clusters then pad
-        chunk_cells = _vectorized_cells(events, CELL_BRANCHES, MAX_CELLS)
-
         # Cells per cluster — preserves cluster association (uses pre-sort csort)
         chunk_cells_pc = _vectorized_cells_per_cluster(
             events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, csort)
@@ -401,12 +272,11 @@ def _process_chunk(events, label, n_events_in_chunk):
         else:
             chunk_decay_mode = np.full(total_jets, -1, dtype=np.int64)
 
-        return chunk_data, chunk_tracks, chunk_cells, chunk_cells_pc, chunk_pid, chunk_decay_mode
+        return chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode
 
     # --- Fallback: multi-jet events (rare) — loop per event/jet ---
     chunk_data = np.zeros((total_jets, MAX_CLUSTERS, NUM_CLUSTER_FEATURES), dtype=np.float32)
     chunk_tracks = np.zeros((total_jets, MAX_TRACKS, NUM_TRACK_FEATURES), dtype=np.float32)
-    chunk_cells = np.zeros((total_jets, MAX_CELLS, NUM_CELL_FEATURES), dtype=np.float32)
     chunk_cells_pc = np.zeros((total_jets, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES), dtype=np.float32)
     chunk_pid = np.full(total_jets, label, dtype=np.int64)
     chunk_decay_mode = np.full(total_jets, -1, dtype=np.int64)
@@ -434,10 +304,6 @@ def _process_chunk(events, label, n_events_in_chunk):
             _fill_point_cloud_features(
                 chunk_tracks[jet_counter], TRACK_BRANCHES, track_arrays,
                 jet_idx, n_jets, MAX_TRACKS,
-            )
-            _fill_cell_features(
-                chunk_cells[jet_counter], CELL_BRANCHES, cell_arrays,
-                jet_idx, n_jets, MAX_CELLS, cluster_sort_indices,
             )
 
             # Fill cells_per_cluster: iterate over sorted clusters
@@ -470,7 +336,7 @@ def _process_chunk(events, label, n_events_in_chunk):
     sort_indices = np.argsort(-chunk_tracks[:, :, trk_pt_idx], axis=1)
     chunk_tracks = np.take_along_axis(chunk_tracks, sort_indices[:, :, np.newaxis], axis=1)
 
-    return chunk_data, chunk_tracks, chunk_cells, chunk_cells_pc, chunk_pid, chunk_decay_mode
+    return chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode
 
 
 def process_file(filepath, label, chunk_size="500 MB"):
@@ -517,9 +383,9 @@ def process_file(filepath, label, chunk_size="500 MB"):
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
-    all_cells_pc = np.concatenate([r[3] for r in chunk_results], axis=0)
-    all_pid = np.concatenate([r[4] for r in chunk_results], axis=0)
-    all_decay_mode = np.concatenate([r[5] for r in chunk_results], axis=0)
+    all_cells_pc = np.concatenate([r[2] for r in chunk_results], axis=0)
+    all_pid = np.concatenate([r[3] for r in chunk_results], axis=0)
+    all_decay_mode = np.concatenate([r[4] for r in chunk_results], axis=0)
     del chunk_results
 
     print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, "
@@ -557,10 +423,10 @@ def main():
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output HDF5 path for single-file/grid mode")
     parser.add_argument("--input_dir", type=str,
-                        default="/pscratch/sd/m/milescb/OmniTau/OmniLearnedData/ntuples/",
+                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/ntuples/",
                         help="Directory containing ROOT files")
     parser.add_argument("--output_dir", type=str,
-                        default="/pscratch/sd/m/milescb/OmniTau/OmniLearnedData/training_data",
+                        default="/pscratch/sd/m/milescb/tau_processedh5_filtered/tau",
                         help="Directory to save HDF5 files")
     parser.add_argument("--train_frac", type=float, default=0.6)
     parser.add_argument("--val_frac", type=float, default=0.2)
