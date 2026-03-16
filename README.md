@@ -41,6 +41,8 @@ Or optionally, if the current package is out-of-date:
 pip install -e .
 ```
 
+Finally, if use of the exact environment we used to train is desired, the docker image at `docker.io/milescb/taucp-omni:torch2.10.0-cuda13.0`. 
+
 
 ## Data
 

@@ -33,7 +33,8 @@ dependencies = [
     "tqdm>=4.67.1",
     "uproot>=5.7.0",
     "matplotlib>=3.10.8",
-    "ipykernel>=7.1.0"
+    "ipykernel>=7.1.0",
+    "awkward>=2.9.0"
 ]
 
 [project.optional-dependencies]
