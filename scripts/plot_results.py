@@ -26,6 +26,9 @@ from sklearn.metrics import (
 from pathlib import Path
 import argparse
 
+import mplhep as hep
+hep.style.use(hep.style.ATLAS)
+
 # Set plotting style
 plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams['figure.figsize'] = [10, 6]
@@ -91,14 +94,14 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
     disp1 = ConfusionMatrixDisplay(cm, display_labels=class_names)
     disp1.plot(ax=axes[0], cmap='Blues', values_format='d')
     axes[0].grid(False)
-    axes[0].set_title('Confusion Matrix (Counts)')
+    axes[0].set_title('Counts')
 
     # Normalized (row-wise = recall)
     cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     disp2 = ConfusionMatrixDisplay(cm_norm, display_labels=class_names)
     disp2.plot(ax=axes[1], cmap='Blues', values_format='.3f')
     axes[1].grid(False)
-    axes[1].set_title('Confusion Matrix (Normalized by True Label)')
+    axes[1].set_title('Normalized by True Label')
 
     plt.tight_layout()
     plt.savefig(f'{output_dir}/confusion_matrix.png', dpi=150, bbox_inches='tight')
@@ -121,13 +124,19 @@ def plot_roc_curves(predictions, true_labels, class_names, output_dir):
 
         axes[i].plot(fpr, tpr, color=color, lw=2, label=f'AUC = {roc_auc:.4f}')
         axes[i].plot([0, 1], [0, 1], 'k--', lw=1)
+        # Set axis limits at the beginning
         axes[i].set_xlim([0.0, 1.0])
-        axes[i].set_ylim([0.0, 1.05])
+        axes[i].set_ylim([0.0, 1.0])
         axes[i].set_xlabel('False Positive Rate')
         axes[i].set_ylabel('True Positive Rate')
         axes[i].set_title(f'{name} vs Rest')
         axes[i].legend(loc='lower right')
         axes[i].grid(True, alpha=0.3)
+
+    # Ensure all axes are within [0, 1] at the end
+    for ax in axes:
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.0])
 
     plt.tight_layout()
     plt.savefig(f'{output_dir}/roc_curves.png', dpi=150, bbox_inches='tight')
@@ -152,6 +161,8 @@ def plot_tau_vs_qcd(predictions, true_labels, output_dir):
     # ROC curve
     axes[0].plot(fpr, tpr, 'b-', lw=2, label=f'Tau vs QCD (AUC = {roc_auc:.4f})')
     axes[0].plot([0, 1], [0, 1], 'k--', lw=1)
+    axes[0].set_xlim([0.0, 1.0])
+    axes[0].set_ylim([0.0, 1.0])
     axes[0].set_xlabel('False Positive Rate (QCD misID)')
     axes[0].set_ylabel('True Positive Rate (Tau efficiency)')
     axes[0].set_title('Tau vs QCD ROC Curve')
@@ -328,6 +339,8 @@ def analyze_decay_mode(data, true_labels, output_dir):
         axes[i].plot(fpr_dm, tpr_dm, color=color, lw=2,
                     label=f'{name} vs Rest (AUC = {auc_dm:.4f})')
         axes[i].plot([0, 1], [0, 1], 'k--', lw=1)
+        axes[i].set_xlim([0.0, 1.0])
+        axes[i].set_ylim([0.0, 1.0])
         axes[i].set_xlabel('False Positive Rate')
         axes[i].set_ylabel('True Positive Rate')
         axes[i].set_title(f'Decay Mode: {name}')
@@ -338,6 +351,10 @@ def analyze_decay_mode(data, true_labels, output_dir):
 
     for i in range(n_classes, len(axes)):
         fig.delaxes(axes[i])
+    # Ensure all axes are within [0, 1] at the end
+    for ax in axes[:n_classes]:
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.0])
     plt.tight_layout()
     plt.savefig(f'{output_dir}/decay_mode_roc.png', dpi=150, bbox_inches='tight')
     plt.close()
@@ -374,6 +391,8 @@ def analyze_electron_vs_qcd(data, true_labels, output_dir):
 
     axes[0].plot(fpr_evq, tpr_evq, 'green', lw=2, label=f'Electron vs QCD (AUC = {auc_evq:.4f})')
     axes[0].plot([0, 1], [0, 1], 'k--', lw=1)
+    axes[0].set_xlim([0.0, 1.0])
+    axes[0].set_ylim([0.0, 1.0])
     axes[0].set_xlabel('False Positive Rate (QCD misID)')
     axes[0].set_ylabel('True Positive Rate (Electron efficiency)')
     axes[0].set_title('Electron vs QCD ROC Curve')
@@ -545,7 +564,6 @@ def plot_training_loss(training_json_path, output_dir):
 
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss')
-    ax.set_title('Training and Validation Loss')
     ax.grid(True, alpha=0.3)
     ax.legend()
 
