@@ -1,15 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Prepare HDF5 datasets for OmniLearned tau identification.
-
-Optimized for large datasets (100GB+ ROOT):
-- Chunked ROOT reading (--chunk_size) limits memory per file
-- Parallel file processing (--workers) uses multiple CPU cores
-- Staging + merge avoids holding all processed data in RAM
-"""
-import sys
-if sys.version_info[0] < 3:
-    sys.exit("This script requires Python 3.")
 """
 Converts ROOT files to HDF5 format with:
 - data: Cluster point cloud features [N, MAX_CLUSTERS, NUM_CLUSTER_FEATURES]
@@ -492,7 +480,7 @@ def process_file(filepath, label, chunk_size="500 MB"):
     Returns:
         data: Cluster features [N_jets, MAX_CLUSTERS, NUM_CLUSTER_FEATURES]
         tracks: Track features [N_jets, MAX_TRACKS, NUM_TRACK_FEATURES]
-        cells: Cell features [N_jets, MAX_CELLS, NUM_CELL_FEATURES]
+        cells_per_cluster: Cell features [N_jets, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES]
         pid: Jet labels [N_jets]
         decay_mode: Decay mode labels [N_jets]
     """
@@ -503,11 +491,11 @@ def process_file(filepath, label, chunk_size="500 MB"):
             n_entries = f["CollectionTree"].num_entries
     except Exception as e:
         print(f"Error opening {filepath}: {e}")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     if n_entries == 0:
         print(f"File {filepath} is empty, skipping...")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     branches = get_all_branches()
     chunk_results = []
@@ -525,19 +513,18 @@ def process_file(filepath, label, chunk_size="500 MB"):
 
     if len(chunk_results) == 0:
         print(f"  No jets in {filepath}")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
-    all_cells = np.concatenate([r[2] for r in chunk_results], axis=0)
     all_cells_pc = np.concatenate([r[3] for r in chunk_results], axis=0)
     all_pid = np.concatenate([r[4] for r in chunk_results], axis=0)
     all_decay_mode = np.concatenate([r[5] for r in chunk_results], axis=0)
     del chunk_results
 
     print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, "
-          f"cells={all_cells.shape}, cells_pc={all_cells_pc.shape}")
-    return all_data, all_tracks, all_cells, all_cells_pc, all_pid, all_decay_mode
+          f"cells_pc={all_cells_pc.shape}")
+    return all_data, all_tracks, all_cells_pc, all_pid, all_decay_mode
 
 
 def _process_file_to_staging(args):
@@ -549,13 +536,12 @@ def _process_file_to_staging(args):
         raise RuntimeError(f"Error processing {filepath}: {e}") from e
     if result is None or result[0] is None:
         return None, 0
-    data, tracks, cells, cells_pc, pid, decay_mode = result
+    data, tracks, cells_pc, pid, decay_mode = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
         hf.create_dataset("data", data=data, compression="gzip")
         hf.create_dataset("tracks", data=tracks, compression="gzip")
-        hf.create_dataset("cells", data=cells, compression="gzip")
         hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
         hf.create_dataset("pid", data=pid)
         hf.create_dataset("decay_mode", data=decay_mode)
@@ -564,6 +550,12 @@ def _process_file_to_staging(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare HDF5 datasets for OmniLearned")
+    parser.add_argument("--input_file", type=str, default=None,
+                        help="Single ROOT file to process (grid/batch mode)")
+    parser.add_argument("--label", type=int, default=None,
+                        help="Label for --input_file: 0=QCD, 1=tau, 2=electron")
+    parser.add_argument("--output_file", type=str, default=None,
+                        help="Output HDF5 path for single-file/grid mode")
     parser.add_argument("--input_dir", type=str,
                         default="/pscratch/sd/m/milescb/OmniTau/OmniLearnedData/ntuples/",
                         help="Directory containing ROOT files")
@@ -591,6 +583,60 @@ def main():
         chunk_size = int(args.chunk_size)
     except ValueError:
         chunk_size = args.chunk_size  # e.g. "500 MB", "2 GB"
+
+    # ------------------------------------------------------------------ #
+    # Single-file / grid mode
+    # ------------------------------------------------------------------ #
+    if args.input_file is not None:
+        if args.label is None or args.output_file is None:
+            parser.error("--label and --output_file are required with --input_file")
+
+        data, tracks, cells_pc, pid, decay_mode = process_file(
+            args.input_file,
+            args.label,
+            chunk_size=chunk_size,
+        )
+
+        output_dir = os.path.dirname(os.path.abspath(args.output_file))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        print(f"Saving {args.output_file}...")
+        with h5py.File(args.output_file, "w") as hf:
+            if data is None:
+                # Keep schema stable even when a file yields no jets.
+                hf.create_dataset(
+                    "data",
+                    shape=(0, MAX_CLUSTERS, NUM_CLUSTER_FEATURES),
+                    maxshape=(None, MAX_CLUSTERS, NUM_CLUSTER_FEATURES),
+                    dtype=np.float32,
+                    compression="gzip",
+                )
+                hf.create_dataset(
+                    "tracks",
+                    shape=(0, MAX_TRACKS, NUM_TRACK_FEATURES),
+                    maxshape=(None, MAX_TRACKS, NUM_TRACK_FEATURES),
+                    dtype=np.float32,
+                    compression="gzip",
+                )
+                hf.create_dataset(
+                    "cells_per_cluster",
+                    shape=(0, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                    maxshape=(None, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                    dtype=np.float32,
+                    compression="gzip",
+                )
+                hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int64)
+                hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int64)
+            else:
+                hf.create_dataset("data", data=data, compression="gzip")
+                hf.create_dataset("tracks", data=tracks, compression="gzip")
+                hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
+                hf.create_dataset("pid", data=pid)
+                hf.create_dataset("decay_mode", data=decay_mode)
+
+        print("Done.")
+        return
 
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -735,13 +781,12 @@ def main():
             with h5py.File(staging_path, "r") as sf:
                 data = sf["data"][:]
                 tracks = sf["tracks"][:]
-                cells = sf["cells"][:]
                 cells_pc = sf["cells_per_cluster"][:]
                 pid = sf["pid"][:]
                 decay_mode = sf["decay_mode"][:]
 
             if sample_shapes is None:
-                sample_shapes = (data.shape[1:], tracks.shape[1:], cells.shape[1:], cells_pc.shape[1:])
+                sample_shapes = (data.shape[1:], tracks.shape[1:], cells_pc.shape[1:])
 
             n = len(data)
             r = np.random.random(n)
@@ -752,20 +797,19 @@ def main():
             for split_name, mask in [("train", train_mask), ("val", val_mask), ("test", test_mask)]:
                 if not mask.any():
                     continue
-                d, t, c, cpc, p, dm = data[mask], tracks[mask], cells[mask], cells_pc[mask], pid[mask], decay_mode[mask]
+                d, t, cpc, p, dm = data[mask], tracks[mask], cells_pc[mask], pid[mask], decay_mode[mask]
                 fp = split_files[split_name]
                 if split_name not in h5_handles:
                     h5_handles[split_name] = h5py.File(fp, "w")
                     h5_handles[split_name].create_dataset("data", data=d, compression="gzip", maxshape=(None,) + d.shape[1:])
                     h5_handles[split_name].create_dataset("tracks", data=t, compression="gzip", maxshape=(None,) + t.shape[1:])
-                    h5_handles[split_name].create_dataset("cells", data=c, compression="gzip", maxshape=(None,) + c.shape[1:])
                     h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc, compression="gzip", maxshape=(None,) + cpc.shape[1:])
                     h5_handles[split_name].create_dataset("pid", data=p, maxshape=(None,))
                     h5_handles[split_name].create_dataset("decay_mode", data=dm, maxshape=(None,))
                     split_offsets[split_name] = len(d)
                 else:
                     hf = h5_handles[split_name]
-                    for ds_name, arr in [("data", d), ("tracks", t), ("cells", c), ("cells_per_cluster", cpc), ("pid", p), ("decay_mode", dm)]:
+                    for ds_name, arr in [("data", d), ("tracks", t), ("cells_per_cluster", cpc), ("pid", p), ("decay_mode", dm)]:
                         hf[ds_name].resize(split_offsets[split_name] + len(arr), axis=0)
                         hf[ds_name][split_offsets[split_name]:] = arr
                     split_offsets[split_name] += len(d)
@@ -775,13 +819,12 @@ def main():
 
     # Create empty HDF5 for splits that received no data (dataloader expects all splits to exist)
     if sample_shapes is not None:
-        cluster_shp, track_shp, cell_shp, cell_pc_shp = sample_shapes
+        cluster_shp, track_shp, cell_pc_shp = sample_shapes
         for split_name in split_paths:
             if split_name not in h5_handles:
                 with h5py.File(split_files[split_name], "w") as hf:
                     hf.create_dataset("data", shape=(0,) + cluster_shp, maxshape=(None,) + cluster_shp, compression="gzip")
                     hf.create_dataset("tracks", shape=(0,) + track_shp, maxshape=(None,) + track_shp, compression="gzip")
-                    hf.create_dataset("cells", shape=(0,) + cell_shp, maxshape=(None,) + cell_shp, compression="gzip")
                     hf.create_dataset("cells_per_cluster", shape=(0,) + cell_pc_shp, maxshape=(None,) + cell_pc_shp, compression="gzip")
                     hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int64)
                     hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int64)
@@ -833,7 +876,7 @@ def main():
     print("DATA STRUCTURE (Option B: Tracks as Separate Tokens)")
     print("="*60)
     with h5py.File(split_files["train"], "r") as f:
-        dshape, tshape, cshape = f["data"].shape, f["tracks"].shape, f["cells"].shape
+        dshape, tshape = f["data"].shape, f["tracks"].shape
         cpc_shape = f["cells_per_cluster"].shape
     print(f"\n  data (clusters): (N, {dshape[1]}, {dshape[2]})")
     print(f"    - {MAX_CLUSTERS} clusters x {NUM_CLUSTER_FEATURES} features")
