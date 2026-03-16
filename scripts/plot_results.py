@@ -14,6 +14,7 @@ Auxiliary tasks:
 
 import numpy as np
 import matplotlib.pyplot as plt
+import json
 from sklearn.metrics import (
     confusion_matrix,
     ConfusionMatrixDisplay,
@@ -514,6 +515,45 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
     plt.close()
 
 
+def plot_training_loss(training_json_path, output_dir):
+    """Plot training and validation loss from a JSON history file."""
+    training_path = Path(training_json_path)
+    if not training_path.exists():
+        print(f"\nTraining history file not found: {training_json_path}")
+        return
+
+    with open(training_path, 'r', encoding='utf-8') as f:
+        history = json.load(f)
+
+    train_loss = history.get('train_loss', [])
+    val_loss = history.get('val_loss', [])
+
+    if len(train_loss) == 0 and len(val_loss) == 0:
+        print(f"\nNo train_loss/val_loss arrays found in: {training_json_path}")
+        return
+
+    print("Plotting training history (train/val loss)...")
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    if len(train_loss) > 0:
+        epochs_train = np.arange(1, len(train_loss) + 1)
+        ax.plot(epochs_train, train_loss, marker='o', markersize=4, lw=2, label='Train Loss')
+
+    if len(val_loss) > 0:
+        epochs_val = np.arange(1, len(val_loss) + 1)
+        ax.plot(epochs_val, val_loss, marker='s', markersize=4, lw=2, label='Val Loss')
+
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_title('Training and Validation Loss')
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/training_loss.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regression_results=None):
     """Print final summary of all tasks."""
     print("\n" + "=" * 60)
@@ -542,7 +582,7 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regr
     print("\n" + "=" * 60)
 
 
-def main(results_path="results/outputs__tau_0.npz", output_dir="results"):
+def main(results_path="results/outputs__tau_0.npz", output_dir="results", training_json_path="checkpoints/training_.json"):
     """Main analysis pipeline."""
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -578,6 +618,9 @@ def main(results_path="results/outputs__tau_0.npz", output_dir="results"):
     # Summary
     print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results)
 
+    # Training history
+    plot_training_loss(training_json_path, output_dir)
+
     print(f"\nAll plots saved to: {output_dir}")
 
 
@@ -588,6 +631,9 @@ if __name__ == "__main__":
                         help="Path to the NPZ results file")
     parser.add_argument('--output_dir', type=str, default="results",
                         help="Directory to save output plots")
+    parser.add_argument('--training_json_path', type=str, default="checkpoints/training_.json",
+                        help="Path to the training history JSON file")
     args = parser.parse_args()
     
-    main(results_path=args.results_path, output_dir=args.output_dir)
+    main(results_path=args.results_path, output_dir=args.output_dir,
+         training_json_path=args.training_json_path)
