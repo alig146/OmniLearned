@@ -161,73 +161,13 @@ class HEPDataset(Dataset):
         if self.nevts < 0:
             self.nevts = len(self.file_indices)
 
-        self._npy_cache_paths = {}
-        self._prepare_npy_cache()
-
     def __len__(self):
         return min(self.nevts, len(self.file_indices))
 
-    def _required_keys(self):
-        keys = ["data", "pid"]
-        if self.use_cond:
-            keys.append("global")
-        if self.use_tracks:
-            keys.append("tracks")
-        if self.use_cells:
-            keys.append("cells_per_cluster")
-        keys.extend(["decay_mode", "data_pid"])
-        return keys
-
-    def _prepare_npy_cache(self):
-        """One-time conversion of HDF5 datasets to .npy for mmap-based access."""
-        required = self._required_keys()
-        for file_idx, file_path in enumerate(self.file_paths):
-            cache_dir = Path(file_path).parent / "npy_cache"
-            stem = Path(file_path).stem
-
-            with h5py.File(file_path, "r") as f:
-                available = set(f.keys())
-                keys_to_cache = [k for k in required if k in available]
-
-                missing = [
-                    k for k in keys_to_cache
-                    if not (cache_dir / f"{stem}_{k}.npy").exists()
-                ]
-
-                if missing:
-                    cache_dir.mkdir(parents=True, exist_ok=True)
-                    print(f"Building numpy cache for {Path(file_path).name} (one-time)...")
-                    for key in missing:
-                        npy_path = cache_dir / f"{stem}_{key}.npy"
-                        ds = f[key]
-                        out = np.lib.format.open_memmap(
-                            str(npy_path), mode="w+",
-                            dtype=ds.dtype, shape=ds.shape,
-                        )
-                        chunk_size = 10000
-                        for start in range(0, ds.shape[0], chunk_size):
-                            end = min(start + chunk_size, ds.shape[0])
-                            out[start:end] = ds[start:end]
-                        del out
-                        print(f"  Cached {key} {ds.shape}")
-
-            paths = {}
-            for key in keys_to_cache:
-                npy_path = cache_dir / f"{stem}_{key}.npy"
-                if npy_path.exists():
-                    paths[key] = str(npy_path)
-            self._npy_cache_paths[file_idx] = paths
-
     def _get_file(self, file_idx):
         if file_idx not in self._file_cache:
-            if self._npy_cache_paths.get(file_idx):
-                data = {}
-                for key, npy_path in self._npy_cache_paths[file_idx].items():
-                    data[key] = np.load(npy_path, mmap_mode="r")
-                self._file_cache[file_idx] = data
-            else:
-                file_path = self.file_paths[file_idx]
-                self._file_cache[file_idx] = h5py.File(file_path, "r")
+            file_path = self.file_paths[file_idx]
+            self._file_cache[file_idx] = h5py.File(file_path, "r")
         return self._file_cache[file_idx]
 
     def _build_sample(
