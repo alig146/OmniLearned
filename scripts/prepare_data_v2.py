@@ -35,8 +35,8 @@ import shutil
 
 
 # Configuration
-MAX_CLUSTERS = 15
-MAX_TRACKS = 15
+MAX_CLUSTERS = 20
+MAX_TRACKS = 20
 MAX_CELLS_PER_CLUSTER = 30
 
 # Cluster branches (particles in point cloud)
@@ -101,10 +101,6 @@ TAU_REGRESSION_TARGETS = [
 ]
 
 MAX_PION_REGRESSION_TARGETS = 4
-# Charged and neutral pions share the same feature layout: [pt, eta, phi].
-# They are stored as separate point clouds:
-#   charged_pion_targets: [N, MAX_PION_REGRESSION_TARGETS, 3]
-#   neutral_pion_targets:  [N, MAX_PION_REGRESSION_TARGETS, 3]
 CHARGED_PION_BRANCHES = [
     ("truth_chargedPion_pt",  "truth_chargedPion_pt",  False),
     ("truth_chargedPion_eta", "truth_chargedPion_eta", False),
@@ -115,22 +111,16 @@ NEUTRAL_PION_BRANCHES = [
     ("truth_neutralPion_eta", "truth_neutralPion_eta", False),
     ("truth_neutralPion_phi", "truth_neutralPion_phi", False),
 ]
-# Keep the old name for backward-compat references elsewhere in the file
 PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
 NUM_CELL_FEATURES = len(CELL_BRANCHES)
 NUM_TAU_REGRESSION_TARGETS = len(TAU_REGRESSION_TARGETS)
-NUM_PION_FEATURES = 3  # pt, eta, phi — same for charged and neutral
+NUM_PION_FEATURES = 3  # pt, eta, phi
 
 OTHER_BRANCHES = [
-    "truth_label",
-    "truth_pt",
-    "truth_eta",
-    "truth_phi",
     "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
-    "truth_pdgId", 
 ]
 
 def get_all_branches():
@@ -143,71 +133,6 @@ def get_all_branches():
     branches += [b for _, b, _ in PION_REGRESSION_TARGETS]
     branches += OTHER_BRANCHES
     return list(set(branches))
-
-def safe_log(arr, epsilon=1e-8):
-    """Apply log transformation safely."""
-    arr = np.array(arr, dtype=np.float32)
-    return np.log(np.maximum(arr, epsilon))
-
-
-def _is_sequence_like(values):
-    """Return True if values behaves like a sequence (list/array/awkward list)."""
-    try:
-        len(values)
-        return True
-    except TypeError:
-        return False
-
-
-def _get_jet_values(event_values, jet_idx, n_jets):
-    """Get per-jet values from branches that may be per-event or per-jet nested."""
-    if not _is_sequence_like(event_values):
-        return [event_values] if jet_idx == 0 else []
-
-    # Common in these ntuples: one jet per event, and branch already stores
-    # the full object list for that event (e.g. clusters/cells/tracks).
-    if n_jets == 1 and len(event_values) > 0:
-        first_item = event_values[0]
-        if not _is_sequence_like(first_item):
-            return event_values
-
-    if len(event_values) <= jet_idx:
-        return []
-
-    jet_values = event_values[jet_idx]
-    if _is_sequence_like(jet_values):
-        return jet_values
-
-    return [jet_values]
-
-
-def _fill_point_cloud_features(
-    output_for_jet,
-    feature_specs,
-    event_feature_arrays,
-    jet_idx,
-    n_jets,
-    max_items,
-    reorder_indices=None,
-):
-    """Fill a single jet point-cloud tensor from feature specs and event data."""
-    for feat_idx, (feat_name, _, apply_log) in enumerate(feature_specs):
-        jet_values = _get_jet_values(event_feature_arrays[feat_name], jet_idx, n_jets)
-        n_values = len(jet_values)
-        if n_values == 0:
-            continue
-
-        values = np.asarray(ak.to_numpy(jet_values), dtype=np.float32)
-        if reorder_indices is not None and len(reorder_indices) > 0:
-            valid_idx = reorder_indices[reorder_indices < len(values)]
-            if len(valid_idx) > 0:
-                values = values[valid_idx]
-
-        n = min(len(values), max_items)
-        values = values[:n]
-        if apply_log:
-            values = safe_log(values)
-        output_for_jet[:n, feat_idx] = values
 
 
 def _pad_and_convert(arr, max_items):
@@ -244,17 +169,6 @@ def _vectorized_scalar_targets(events, feature_specs):
         out[:, feat_idx] = arr
     return out
 
-
-def _vectorized_pion_targets(events, pion_branch_specs, max_pions):
-    """Build (N, max_pions, N_pion_features) array from ragged pion branches.
-
-    pion_branch_specs is a list of (feat_name, branch_name, apply_log) tuples,
-    one per pion feature (pt, eta, phi).  Each branch is ragged (variable number
-    of pions per event) and is padded / clipped to max_pions.
-    """
-    return _vectorized_point_cloud(events, pion_branch_specs, max_pions)
-
-
 def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None):
     """Build (N, max_clusters, max_cells_pc, N_features) preserving cluster->cell association.
 
@@ -269,7 +183,7 @@ def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc
         arr = events[branch_name]
         ndim = arr.ndim if hasattr(arr, 'ndim') else ak.Array(arr).ndim
         if ndim < 3:
-            continue
+            raise ValueError("Incorrect useage of cell vectorization func.")
 
         for evt in range(n):
             evt_clusters = arr[evt]
@@ -284,10 +198,11 @@ def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc
                         vals[nz] = np.log(np.maximum(vals[nz], 1e-8))
                     out[evt, ci, :nc, feat_idx] = vals
 
-    if cluster_sort is not None:
-        idx = cluster_sort[:, :, np.newaxis, np.newaxis]
-        idx = np.broadcast_to(idx, out.shape)
-        out = np.take_along_axis(out, idx, axis=1)
+    # TODO: if sorting, should be done BEFORE filling above
+    # if cluster_sort is not None:
+    #     idx = cluster_sort[:, :, np.newaxis, np.newaxis]
+    #     idx = np.broadcast_to(idx, out.shape)
+    #     out = np.take_along_axis(out, idx, axis=1)
 
     return out
 
@@ -317,22 +232,22 @@ def _process_chunk(events, label, n_events_in_chunk):
         events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER)
 
     # Labels
-    chunk_pid = np.full(total_jets, label, dtype=np.int64)
+    chunk_pid = np.full(total_jets, label, dtype=np.int32)
     dm = events["truth_decayMode"]
-    dm_flat = ak.to_numpy(ak.flatten(dm)).astype(np.int64)
+    dm_flat = ak.to_numpy(ak.flatten(dm)).astype(np.int32)
     if label == 1:
         dm_flat[(dm_flat < 0) | (dm_flat > 6)] = -1
         chunk_decay_mode = dm_flat
     else:
-        chunk_decay_mode = np.full(total_jets, -1, dtype=np.int64)
+        chunk_decay_mode = np.full(total_jets, -1, dtype=np.int32)
 
     # Tau regression targets — one scalar set per jet
     chunk_tau_targets = _vectorized_scalar_targets(events, TAU_REGRESSION_TARGETS)
 
     # Pion regression targets — ragged lists padded to MAX_PION_REGRESSION_TARGETS
-    chunk_charged_pion_targets = _vectorized_pion_targets(
+    chunk_charged_pion_targets = _vectorized_point_cloud(
         events, CHARGED_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
-    chunk_neutral_pion_targets = _vectorized_pion_targets(
+    chunk_neutral_pion_targets = _vectorized_point_cloud(
         events, NEUTRAL_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
@@ -451,7 +366,7 @@ def main():
     parser.add_argument(
         "--workers",
         type=int,
-        default=5,
+        default=9,
         help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
     )
     args = parser.parse_args()
@@ -504,8 +419,8 @@ def main():
                     dtype=np.float32,
                     compression="gzip",
                 )
-                hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int64)
-                hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int64)
+                hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
+                hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
                 hf.create_dataset(
                     "tau_targets",
                     shape=(0, NUM_TAU_REGRESSION_TARGETS),
@@ -547,13 +462,13 @@ def main():
     ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_17_26_Prod1_EXT0"
     
     # JZ2 files (label 0)
-    jz2_files = [os.listdir(jz_rucio_name)[0]]
+    jz2_files = os.listdir(os.path.join(args.input_dir, jz_rucio_name))
     
     # Gammatautau files (label 1)
-    gammatautau_files = [os.listdir(tautau_rucio_name)[0]]
+    gammatautau_files = os.listdir(os.path.join(args.input_dir, tautau_rucio_name))
     
     # Gammaee files (label 2)
-    gammaee_files = [os.listdir(ee_rucio_name)[0]]
+    gammaee_files = os.listdir(os.path.join(args.input_dir, ee_rucio_name))
     
     files_and_labels = []
 
@@ -721,8 +636,8 @@ def main():
                     hf.create_dataset("data", shape=(0,) + cluster_shp, maxshape=(None,) + cluster_shp, compression="gzip")
                     hf.create_dataset("tracks", shape=(0,) + track_shp, maxshape=(None,) + track_shp, compression="gzip")
                     hf.create_dataset("cells_per_cluster", shape=(0,) + cell_pc_shp, maxshape=(None,) + cell_pc_shp, compression="gzip")
-                    hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int64)
-                    hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int64)
+                    hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
+                    hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
                     hf.create_dataset("tau_targets", shape=(0,) + tau_shp, maxshape=(None,) + tau_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("charged_pion_targets", shape=(0,) + cpt_shp, maxshape=(None,) + cpt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("neutral_pion_targets", shape=(0,) + npt_shp, maxshape=(None,) + npt_shp, dtype=np.float32, compression="gzip")
