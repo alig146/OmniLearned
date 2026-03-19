@@ -292,8 +292,9 @@ class LocalEmbeddingBlock(nn.Module):
             distances = self.pairwise_distance(
                 points
             )  # uses custom pairwise function, not torch.cdist
-            _, indices = torch.topk(-distances, k=self.K + 1, dim=-1)
-            indices = indices[:, :, 1:]  # Exclude self
+            k_actual = min(self.K + 1, num_points)
+            _, indices = torch.topk(-distances, k=k_actual, dim=-1)
+            indices = indices[:, :, 1:] if k_actual > 1 else indices  # Exclude self if possible
 
             idx_base = (
                 torch.arange(0, batch_size, device=features.device).view(-1, 1, 1)
@@ -302,11 +303,16 @@ class LocalEmbeddingBlock(nn.Module):
             indices = indices + idx_base
             indices = indices.view(-1)
 
+        # Dynamically determine K from indices shape
+        K_dynamic = indices.numel() // (batch_size * num_points)
+        if K_dynamic != self.K:
+            print(f"ERROR: Dynamic K ({K_dynamic}) differs from configured K ({self.K}) for at least one batch.")
+
         neighbors = features.view(batch_size * num_points, -1)[indices, :]
-        neighbors = neighbors.view(batch_size, num_points, self.K, num_dims)
+        neighbors = neighbors.view(batch_size, num_points, K_dynamic, num_dims)
 
         mask_neighbors = mask.view(batch_size * num_points, -1)[indices, :]
-        mask_neighbors = mask_neighbors.view(batch_size, num_points, self.K, 1)
+        mask_neighbors = mask_neighbors.view(batch_size, num_points, K_dynamic, 1)
 
         knn_fts_center = features.unsqueeze(2).expand_as(neighbors)
         local_features = knn_fts_center - neighbors
@@ -344,16 +350,16 @@ class LocalEmbeddingBlock(nn.Module):
                 * mask_neighbors
             )
 
-        mask_neighbors = mask_neighbors.view(batch_size * num_points, self.K, 1)
-        local_features = local_features.view(batch_size * num_points, self.K, -1)
+        mask_neighbors = mask_neighbors.view(batch_size * num_points, K_dynamic, 1)
+        local_features = local_features.view(batch_size * num_points, K_dynamic, -1)
 
         x = self.mlp(local_features) * mask_neighbors
 
         for ib, blk in enumerate(self.in_blocks):
             x = blk(x, mask=mask_neighbors)
 
-        x = x.view((batch_size, num_points, self.K, -1))
-        mask_neighbors = mask_neighbors.view((batch_size, num_points, self.K, -1))
+        x = x.view((batch_size, num_points, K_dynamic, -1))
+        mask_neighbors = mask_neighbors.view((batch_size, num_points, K_dynamic, -1))
         x = torch.sum(x, dim=2) / torch.sum(1e-9 + mask_neighbors, dim=2) * mask
         return x, indices
 
