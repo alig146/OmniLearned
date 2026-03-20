@@ -224,7 +224,7 @@ def plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_name
     """Plot score distributions for each decay mode class."""
     print("Plotting decay mode score distributions...")
     n_classes = len(prong_names)
-    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'][:n_classes]
+    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'][:n_classes]
     ncols = 4
     nrows = (n_classes + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
@@ -254,30 +254,32 @@ def plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_name
 
 
 def analyze_decay_mode(data, true_labels, output_dir):
-    """Analyze 7-class decay mode predictions."""
+    """Analyze 5-class decay mode predictions."""
     if 'aux_decay_mode_pred' not in data.keys():
         print("\nNo auxiliary decay_mode predictions found.")
         return None
 
     print("\n" + "=" * 60)
-    print("AUXILIARY TASK 1: Decay Mode (7-class)")
+    print("AUXILIARY TASK 1: Decay Mode (5-class)")
     print("=" * 60)
 
     decay_mode_pred = data['aux_decay_mode_pred']
     decay_mode_true = data['decay_mode']
     n_classes = decay_mode_pred.shape[-1]
 
-    tau_mask = true_labels == 1
-    valid_mask = tau_mask & (decay_mode_true >= 0) & (decay_mode_true < n_classes)
+    # Filter tau jets and valid decay modes (0-4)
+    tau_mask = (true_labels == 1)
+    valid_mask = tau_mask & (decay_mode_true >= 0) & (decay_mode_true < 5)
 
     print(f"\nTotal tau jets: {tau_mask.sum()}")
-    print(f"Tau jets with valid decay mode (0-{n_classes-1}): {valid_mask.sum()}")
+    print(f"Tau jets with valid decay mode (0-4): {valid_mask.sum()}")
 
     dm_pred_valid = decay_mode_pred[valid_mask]
     dm_true_valid = decay_mode_true[valid_mask]
     dm_pred_labels = np.argmax(dm_pred_valid, axis=1)
 
-    prong_names = ['1p0n', '1p1n', '1pXn', '3p0n', '3pXn', 'Other', 'NotSet'][:n_classes]
+    prong_names = ['1p0n', '1p1n', '1pXn', '3p0n', '3pXn']
+    n_classes_plot = 5
 
     print("\nDecay mode distribution:")
     for i, name in enumerate(prong_names):
@@ -296,9 +298,9 @@ def analyze_decay_mode(data, true_labels, output_dir):
     plot_decay_mode_score_distributions(dm_pred_valid, dm_true_valid, prong_names, output_dir)
 
     print("Plotting decay mode confusion matrices...")
-    fig, axes = plt.subplots(1, 2, figsize=(max(12, 2 * n_classes), max(5, n_classes)))
+    fig, axes = plt.subplots(1, 2, figsize=(max(12, 2 * n_classes_plot), max(5, n_classes_plot)))
 
-    cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels, labels=list(range(n_classes)))
+    cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels, labels=list(range(n_classes_plot)))
     disp1 = ConfusionMatrixDisplay(cm_dm, display_labels=prong_names)
     disp1.plot(ax=axes[0], cmap='Oranges', values_format='d')
     axes[0].grid(False)
@@ -317,9 +319,9 @@ def analyze_decay_mode(data, true_labels, output_dir):
     plt.close()
 
     print("Plotting decay mode ROC curves...")
-    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'][:n_classes]
+    colors_dm = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
     ncols = 4
-    nrows = (n_classes + ncols - 1) // ncols
+    nrows = (n_classes_plot + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
     axes = axes.flatten()
 
@@ -349,10 +351,10 @@ def analyze_decay_mode(data, true_labels, output_dir):
 
         print(f"  {name}: {auc_dm:.4f}")
 
-    for i in range(n_classes, len(axes)):
+    for i in range(n_classes_plot, len(axes)):
         fig.delaxes(axes[i])
     # Ensure all axes are within [0, 1] at the end
-    for ax in axes[:n_classes]:
+    for ax in axes[:n_classes_plot]:
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.0])
     plt.tight_layout()
