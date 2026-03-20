@@ -119,7 +119,9 @@ def train_step(
         aux_masks = {}
         if batch.get("decay_mode") is not None:
             aux_labels["decay_mode"] = batch["decay_mode"].to(device)
-            aux_masks["decay_mode"] = (y == 1)  # Only taus
+            # only taus and those with valid decay modes
+            aux_masks["decay_mode"] = ((y == 1)  
+                & (aux_labels["decay_mode"] != 5) & (aux_labels["decay_mode"] != 6))
         
         # Electron vs QCD: derived from pid
         aux_tasks = (model.module.aux_tasks if hasattr(model, 'module') else model.aux_tasks) or []

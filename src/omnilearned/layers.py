@@ -306,7 +306,8 @@ class LocalEmbeddingBlock(nn.Module):
         # Dynamically determine K from indices shape
         K_dynamic = indices.numel() // (batch_size * num_points)
         if K_dynamic != self.K:
-            print(f"ERROR: Dynamic K ({K_dynamic}) differs from configured K ({self.K}) for at least one batch.")
+            print(f"ERROR: Dynamic K ({K_dynamic}) differs from configured K \
+                  ({self.K}) for at least one batch.")
 
         neighbors = features.view(batch_size * num_points, -1)[indices, :]
         neighbors = neighbors.view(batch_size, num_points, K_dynamic, num_dims)
