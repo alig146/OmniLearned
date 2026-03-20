@@ -293,7 +293,7 @@ def get_loss(
                 continue
 
             task_labels = aux_labels[task_name]
-            task_weight = aux_weights.get(task_name, 0.5)
+            task_weight = aux_weights.get(task_name, 1.0) # TODO: effect of changing this?!
             task_mask = aux_masks.get(task_name, None)
 
             # Apply mask if provided (e.g., decay_mode only for tau samples)
