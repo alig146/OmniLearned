@@ -71,9 +71,9 @@ PION_FEATURE_NAMES = ["pt", "eta", "phi"]
 
 # Must match prepare_data.py
 MAX_PION_REGRESSION_TARGETS = 4
-MAX_CLUSTERS = 15
-MAX_TRACKS = 15
-MAX_CELLS_PER_CLUSTER = 30
+MAX_CLUSTERS = 20
+MAX_TRACKS = 20
+MAX_CELLS_PER_CLUSTER = 20
 
 NUM_TRACK_FEATURES = len(TRACK_FEATURE_NAMES)
 NUM_CELL_FEATURES  = len(CELL_FEATURE_NAMES)
@@ -477,7 +477,7 @@ def plot_summary_stats(data, output_dir):
     n_clusters = (clusters[:, :, 3] != 0).sum(axis=1)
     for class_id in CLASS_NAMES:
         mask = pid == class_id
-        ax.hist(n_clusters[mask], bins=range(0, 17), alpha=0.5, density=True,
+        ax.hist(n_clusters[mask], bins=range(0, MAX_CLUSTERS+1), alpha=0.5, density=True,
                 label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     _apply_axis_style(ax, "Number of Clusters", "Density", "Clusters per Jet")
     ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
@@ -488,7 +488,7 @@ def plot_summary_stats(data, output_dir):
     n_tracks  = (reshaped[:, :, 3] != 0).sum(axis=1)
     for class_id in CLASS_NAMES:
         mask = pid == class_id
-        ax.hist(n_tracks[mask], bins=range(0, 17), alpha=0.5, density=True,
+        ax.hist(n_tracks[mask], bins=range(0, MAX_TRACKS+1), alpha=0.5, density=True,
                 label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
     _apply_axis_style(ax, "Number of Tracks", "Density", "Tracks per Jet")
     ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
@@ -554,7 +554,7 @@ def plot_2d_correlations(data, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot feature distributions from HDF5 data")
-    parser.add_argument("--input",  type=str, default="/pscratch/sd/m/milescb/processed_h5/tau/val/data.h5",
+    parser.add_argument("--input",  type=str, default="/global/cfs/cdirs/m2616/TauCPML/DataTesting/processed_h5/tau/val/data.h5",
                         help="Path to input HDF5 file")
     parser.add_argument("--output", type=str, default="plots/",
                         help="Output directory for plots")
