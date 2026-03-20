@@ -2,7 +2,7 @@
 Converts ROOT files to HDF5 format with:
 - data: Cluster point cloud features [N, MAX_CLUSTERS, NUM_CLUSTER_FEATURES]
 - tracks: Track point cloud features [N, MAX_TRACKS, NUM_TRACK_FEATURES] 
-- cells: Cell point cloud per cluster [N, MAX_CELLS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES] 
+- cells: Cell point cloud per cluster [N, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES] 
 - pid: Jet type label (0=QCD, 1=tau, 2=electron)
 - decay_mode: Tau decay mode (0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, -1=N/A or Error)
 - tau_targets: Tau regression targets [N, NUM_TAU_REGRESSION_TARGETS] (truth_pt, truth_eta, truth_phi)
@@ -37,7 +37,7 @@ import shutil
 # Configuration
 MAX_CLUSTERS = 20
 MAX_TRACKS = 20
-MAX_CELLS_PER_CLUSTER = 30
+MAX_CELLS_PER_CLUSTER = 20
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -355,8 +355,8 @@ def main():
     parser.add_argument("--output_dir", type=str,
                         default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5/tau",
                         help="Directory to save HDF5 files")
-    parser.add_argument("--train_frac", type=float, default=0.6)
-    parser.add_argument("--val_frac", type=float, default=0.2)
+    parser.add_argument("--train_frac", type=float, default=0.8)
+    parser.add_argument("--val_frac", type=float, default=0.1)
     parser.add_argument(
         "--chunk_size",
         type=str,
