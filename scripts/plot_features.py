@@ -75,6 +75,7 @@ MAX_CLUSTERS = 20
 MAX_TRACKS = 20
 MAX_CELLS_PER_CLUSTER = 20
 
+NUM_CLUSTER_FEATURES = len(CLUSTER_FEATURE_NAMES)
 NUM_TRACK_FEATURES = len(TRACK_FEATURE_NAMES)
 NUM_CELL_FEATURES  = len(CELL_FEATURE_NAMES)
 
@@ -90,6 +91,7 @@ PLOT_STYLE = dict(fontsize_label=12, fontsize_legend=10, fontsize_title=13, dpi=
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def load_data(filepath):
     """Load HDF5 data."""
@@ -133,10 +135,25 @@ def get_valid_cell_values(cells, feature_idx):
 
 
 def get_valid_track_values(tracks, feature_idx):
-    """Extract non-zero (valid) track values. Uses trk_E (feature 3) as presence mask."""
+    """Extract non-zero (valid) track values. Uses trk_pT (feature 3) as presence mask."""
     reshaped = tracks.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
     valid_mask = reshaped[:, :, 3] != 0
     return reshaped[:, :, feature_idx][valid_mask]
+
+
+def get_valid_cluster_values_at_index(clusters, feature_idx, cluster_idx):
+    """Extract valid cluster values for one cluster slot across all jets."""
+    values = clusters[:, cluster_idx, feature_idx]
+    valid_mask = clusters[:, cluster_idx, 3] != 0
+    return values[valid_mask]
+
+
+def get_valid_track_values_at_index(tracks, feature_idx, track_idx):
+    """Extract valid track values for one track slot across all jets."""
+    reshaped = tracks.reshape(-1, MAX_TRACKS, NUM_TRACK_FEATURES)
+    values = reshaped[:, track_idx, feature_idx]
+    valid_mask = reshaped[:, track_idx, 3] != 0
+    return values[valid_mask]
 
 
 def flatten_cells(cells_per_cluster):
@@ -188,6 +205,7 @@ def _make_fig(title=None, **subplot_kwargs):
 # ---------------------------------------------------------------------------
 # Grouped histogram helpers
 # ---------------------------------------------------------------------------
+
 
 def _plot_feature_by_group(ax, arrays_by_group, feature_idx, extractor,
                            group_names, group_colors):
@@ -286,6 +304,109 @@ def plot_cell_features(data, output_dir):
         "Cell", "cell", output_dir,
     )
 
+# ---------------------------------------------------------------------------
+# Per-feature (per-index) plots
+# ---------------------------------------------------------------------------
+
+
+def plot_percluster_features(data, output_dir):
+    """Plot individual per-cluster feature distributions by class."""
+    print("\nPlotting per-cluster features...")
+    clusters = data["clusters"]
+    arrays   = _build_class_arrays(clusters, data["pid"])
+    print(f"  Found classes: {list(arrays.keys())}")
+    _plot_featurebyindex_grid(
+        arrays, CLUSTER_FEATURE_NAMES, get_valid_cluster_values_at_index,
+        CLASS_NAMES, CLASS_COLORS,
+        "Cluster", "cluster", output_dir, MAX_CLUSTERS, "cluster",
+    )
+
+
+def plot_pertrack_features(data, output_dir, max_track_index=15):
+    """Plot individual per-track feature distributions by class."""
+    print("\nPlotting per-track features...")
+    tracks = data["tracks"]
+    arrays = _build_class_arrays(tracks, data["pid"])
+    print(f"  Found classes: {list(arrays.keys())}")
+    n_slots = min(MAX_TRACKS, max_track_index + 1)
+    _plot_featurebyindex_grid(
+        arrays, TRACK_FEATURE_NAMES, get_valid_track_values_at_index,
+        CLASS_NAMES, CLASS_COLORS,
+        "Track", "track", output_dir, n_slots, "track",
+    )
+
+
+def _plot_featurebyindex_grid(data_arrays, feature_names, extractor_by_index,
+                              group_names, group_colors,
+                              title_prefix, filename_prefix, output_dir,
+                              max_index, index_label):
+    """
+    For every feature and index slot, create one figure that overlays all groups.
+
+    Parameters
+    ----------
+    data_arrays       : dict {group_id: array}
+    feature_names     : list[str]
+    extractor_by_index: callable(array, feature_idx, slot_idx) -> 1-D values
+    group_names       : dict {group_id: str}
+    group_colors      : dict {group_id: str}
+    title_prefix      : str
+    filename_prefix   : str
+    output_dir        : str
+    max_index         : int
+    index_label       : str
+    """
+    n_saved = 0
+    for feature_idx, feature_name in enumerate(feature_names):
+        safe_feature = _safe_feature_name(feature_name)
+        for slot_idx in range(max_index):
+            fig, ax = _make_fig(figsize=(6, 6))
+            for gid, arr in data_arrays.items():
+                if len(arr) == 0:
+                    continue
+                vals = extractor_by_index(arr, feature_idx, slot_idx)
+                _clip_and_hist(ax, vals, group_names[gid], group_colors[gid])
+
+            _apply_axis_style(
+                ax,
+                feature_name,
+                "Density",
+                f"{title_prefix} {slot_idx}: {feature_name}",
+            )
+            ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
+            out_name = f"{filename_prefix}_{index_label}_{slot_idx}_{safe_feature}.png"
+            _save_and_close(fig, os.path.join(output_dir, out_name))
+            n_saved += 1
+
+    print(f"  Saved {n_saved} {filename_prefix} per-{index_label} feature plots")
+
+
+def _plot_feature_grid(data_arrays, feature_names, extractor,
+                       group_names, group_colors,
+                       title_prefix, filename_prefix, output_dir):
+    """
+    For every feature, create one figure that overlays all groups.
+
+    Parameters
+    ----------
+    data_arrays  : dict {group_id: array}
+    feature_names: list[str]
+    extractor    : callable(array, feature_idx) → 1-D values
+    group_names  : dict {group_id: str}
+    group_colors : dict {group_id: str}
+    title_prefix : str   e.g. "Cluster"
+    filename_prefix : str e.g. "cluster"
+    output_dir   : str
+    """
+    for i, feature_name in enumerate(feature_names):
+        fig, ax = _make_fig(figsize=(6, 6))
+        _plot_feature_by_group(ax, data_arrays, i, extractor, group_names, group_colors)
+        _apply_axis_style(ax, feature_name, "Density", f"{title_prefix}: {feature_name}")
+        safe = _safe_feature_name(feature_name)
+        _save_and_close(fig, os.path.join(output_dir, f"{filename_prefix}_{safe}.png"))
+    print(f"  Saved {len(feature_names)} {filename_prefix} feature plots")
+
+
 
 # ---------------------------------------------------------------------------
 # Decay-mode breakdowns
@@ -321,6 +442,7 @@ def plot_decay_mode_features(data, output_dir):
     )
 
 
+
 def plot_cell_features_by_decay_mode(data, output_dir):
     """Plot cell feature distributions by decay mode (tau jets only)."""
     print("\nPlotting cell features by detailed decay mode (tau jets only)...")
@@ -336,6 +458,34 @@ def plot_cell_features_by_decay_mode(data, output_dir):
         cell_arrays, CELL_FEATURE_NAMES, get_valid_cell_values,
         DECAY_MODE_NAMES, DECAY_MODE_COLORS,
         "Tau Cell", "cell_by_decay_mode", output_dir,
+    )
+
+# ---------------------------------------------------------------------------
+# Per-feature (per-index) plots (for Decay Mode Breakdown)
+# ---------------------------------------------------------------------------
+
+def plot_perindex_decay_mode_features(data, output_dir, max_track_index=15):
+    """Plot cluster and track features by decay mode (tau jets only)."""
+    print("\nPlotting features by detailed decay mode (tau jets only)...")
+    pid, decay_mode = data["pid"], data["decay_mode"]
+
+    if ((pid == 1) & (decay_mode >= 0)).sum() == 0:
+        print("  No tau jets with valid decay mode found, skipping...")
+        return
+
+    cluster_arrays = _tau_arrays_by_decay_mode(data["clusters"], pid, decay_mode)
+    _plot_featurebyindex_grid(
+        cluster_arrays, CLUSTER_FEATURE_NAMES, get_valid_cluster_values_at_index,
+        DECAY_MODE_NAMES, DECAY_MODE_COLORS,
+        "Tau Cluster", "cluster_by_decay_mode", output_dir, MAX_CLUSTERS, "cluster",
+    )
+
+    n_slots = min(MAX_TRACKS, max_track_index + 1)
+    track_arrays = _tau_arrays_by_decay_mode(data["tracks"], pid, decay_mode)
+    _plot_featurebyindex_grid(
+        track_arrays, TRACK_FEATURE_NAMES, get_valid_track_values_at_index,
+        DECAY_MODE_NAMES, DECAY_MODE_COLORS,
+        "Tau Track", "track_by_decay_mode", output_dir, n_slots, "track",
     )
 
 
@@ -552,6 +702,7 @@ def plot_2d_correlations(data, output_dir):
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Plot feature distributions from HDF5 data")
     parser.add_argument("--input",  type=str, default="/global/cfs/cdirs/m2616/TauCPML/DataTesting/processed_h5/tau/val/data.h5",
@@ -563,14 +714,17 @@ def main():
     os.makedirs(args.output, exist_ok=True)
     data = load_data(args.input)
 
-    plot_summary_stats(data, args.output)
-    plot_cluster_features(data, args.output)
-    plot_track_features(data, args.output)
-    plot_cell_features(data, args.output)
-    plot_decay_mode_features(data, args.output)
-    plot_cell_features_by_decay_mode(data, args.output)
-    plot_truth_targets(data, args.output)
-    plot_2d_correlations(data, args.output)
+    #plot_summary_stats(data, args.output)
+    #plot_cluster_features(data, args.output)
+    #plot_track_features(data, args.output)
+    #plot_cell_features(data, args.output)
+    #plot_decay_mode_features(data, args.output)
+    #plot_cell_features_by_decay_mode(data, args.output)
+    #plot_truth_targets(data, args.output)
+    #plot_2d_correlations(data, args.output)
+    #plot_percluster_features(data, args.output)
+    #plot_pertrack_features(data, args.output)
+    plot_perindex_decay_mode_features(data, args.output)
 
     print(f"\nAll plots saved to {args.output}")
     print("\nGenerated files:")
