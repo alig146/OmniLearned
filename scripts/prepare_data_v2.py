@@ -123,10 +123,12 @@ OTHER_BRANCHES = [
     "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
 ]
 
-def get_all_branches():
-    """Get list of all branches to read."""
+def get_all_branches(label=None):
+    """Get list of all branches to read. Only includes cell branches for tau (label=1)."""
     branches = []
-    branches += [b for _, b, _ in CELL_BRANCHES]
+    # Only attempt to read cell branches for tau events (label 1)
+    if label == 1:
+        branches += [b for _, b, _ in CELL_BRANCHES]
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
     branches += [b for _, b, _ in TAU_REGRESSION_TARGETS]
@@ -169,7 +171,7 @@ def _vectorized_scalar_targets(events, feature_specs):
         out[:, feat_idx] = arr
     return out
 
-def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None):
+def _vectorized_cells_per_cluster(label, events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None):
     """Build (N, max_clusters, max_cells_pc, N_features) preserving cluster->cell association.
 
     Cell branches are doubly ragged: events x clusters x cells.
@@ -179,24 +181,31 @@ def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc
     n_feat = len(cell_specs)
     out = np.zeros((n, max_clusters, max_cells_pc, n_feat), dtype=np.float32)
 
-    for feat_idx, (_, branch_name, apply_log) in enumerate(cell_specs):
-        arr = events[branch_name]
-        ndim = arr.ndim if hasattr(arr, 'ndim') else ak.Array(arr).ndim
-        if ndim < 3:
-            raise ValueError("Incorrect useage of cell vectorization func.")
+    if label == 1:
+        for feat_idx, (_, branch_name, apply_log) in enumerate(cell_specs):
+            arr = events[branch_name]
+            ndim = arr.ndim if hasattr(arr, 'ndim') else ak.Array(arr).ndim
+            if ndim < 3:
+                raise ValueError("Incorrect useage of cell vectorization func.")
 
-        for evt in range(n):
-            evt_clusters = arr[evt]
-            n_cls = min(len(evt_clusters), max_clusters)
-            for ci in range(n_cls):
-                cells = evt_clusters[ci]
-                nc = min(len(cells), max_cells_pc)
-                if nc > 0:
-                    vals = ak.to_numpy(cells[:nc]).astype(np.float32)
-                    if apply_log:
-                        nz = vals != 0
-                        vals[nz] = np.log(np.maximum(vals[nz], 1e-8))
+            for evt in range(n):
+                evt_clusters = arr[evt]
+                n_cls = min(len(evt_clusters), max_clusters)
+                for ci in range(n_cls):
+                    cells = evt_clusters[ci]
+                    nc = min(len(cells), max_cells_pc)
+                    if nc > 0:
+                        vals = ak.to_numpy(cells[:nc]).astype(np.float32)
+                        if apply_log:
+                            nz = vals != 0
+                            vals[nz] = np.log(np.maximum(vals[nz], 1e-8))
                     out[evt, ci, :nc, feat_idx] = vals
+
+    #elif label == 0 or label == 2:
+    #    for feat_idx, (_, branch_name, apply_log) in enumerate(cell_specs):
+    #        for evt in range(n):
+    #            for ci in range(max_clusters):
+    #                out[evt, ci, :, feat_idx] = 0.0
 
     # TODO: if sorting, should be done BEFORE filling above
     # if cluster_sort is not None:
@@ -229,7 +238,7 @@ def _process_chunk(events, label, n_events_in_chunk):
 
     # Cells per cluster — preserves cluster association (uses pre-sort csort)
     chunk_cells_pc = _vectorized_cells_per_cluster(
-        events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER)
+        label, events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER)
 
     # Labels
     chunk_pid = np.full(total_jets, label, dtype=np.int32)
@@ -254,7 +263,7 @@ def _process_chunk(events, label, n_events_in_chunk):
             chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets)
 
 
-def process_file(filepath, label, chunk_size="500 MB"):
+def process_file(filepath, label, chunk_size="250 MB"):
     """
     Process a single ROOT file with chunked reading (memory-efficient for large files).
 
@@ -281,7 +290,7 @@ def process_file(filepath, label, chunk_size="500 MB"):
         print(f"File {filepath} is empty, skipping...")
         return None, None, None, None, None, None, None, None
 
-    branches = get_all_branches()
+    branches = get_all_branches(label=label)
     chunk_results = []
 
     for chunk_batch in tqdm(
@@ -360,13 +369,13 @@ def main():
     parser.add_argument(
         "--chunk_size",
         type=str,
-        default="500 MB",
+        default="250 MB",
         help="ROOT read chunk size: int (entries) or str (e.g. '500 MB', '2 GB'). Lower = less memory, more I/O.",
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=9,
+        default=1,
         help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
     )
     args = parser.parse_args()
@@ -456,25 +465,65 @@ def main():
         return
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_03_23_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_03_23_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_23_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_03_23_26_Prod1_EXT0"
+
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_03_23_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_23_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
     
-    jz_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_17_26_Prod1_EXT0"
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_17_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_17_26_Prod1_EXT0"
     
     # JZ2 files (label 0)
-    jz2_files = os.listdir(os.path.join(args.input_dir, jz_rucio_name))
-    
+    #jz0_files = os.listdir(os.path.join(args.input_dir, jz0_rucio_name))
+    #jz1_files = os.listdir(os.path.join(args.input_dir, jz1_rucio_name))
+    #jz2_files = os.listdir(os.path.join(args.input_dir, jz2_rucio_name))
+    #jz3_files = os.listdir(os.path.join(args.input_dir, jz3_rucio_name))
+    #jz4_files = os.listdir(os.path.join(args.input_dir, jz4_rucio_name))
+
+
+    jz0_files = sorted(os.listdir(os.path.join(args.input_dir, jz0_rucio_name)))[:2]
+    jz1_files = sorted(os.listdir(os.path.join(args.input_dir, jz1_rucio_name)))[:2]
+    jz2_files = sorted(os.listdir(os.path.join(args.input_dir, jz2_rucio_name)))[:2]
+    jz3_files = sorted(os.listdir(os.path.join(args.input_dir, jz3_rucio_name)))[:2]
+    jz4_files = sorted(os.listdir(os.path.join(args.input_dir, jz4_rucio_name)))[:2]
+
+
+    print('JZ0 files:', jz0_files)
+    print('JZ1 files:', jz1_files)
+    print('JZ2 files:', jz2_files)
+    print('JZ3 files:', jz3_files)   
+    print('JZ4 files:', jz4_files)
+
     # Gammatautau files (label 1)
-    gammatautau_files = os.listdir(os.path.join(args.input_dir, tautau_rucio_name))
+    gammatautau_files = os.listdir(os.path.join(args.input_dir, tautau_rucio_name))[:2] # Extra edit for testing
     
     # Gammaee files (label 2)
-    gammaee_files = os.listdir(os.path.join(args.input_dir, ee_rucio_name))
+    gammaee_files = os.listdir(os.path.join(args.input_dir, ee_rucio_name))[:2] # Extra edit for testing
     
     files_and_labels = []
 
+    # Add JZ0 files with label 0
+    for fname in jz0_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
+
+    # Add JZ1 files with label 0
+    for fname in jz1_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
+
     # Add JZ2 files with label 0
     for fname in jz2_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz_rucio_name, fname), 0))
+        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
+
+    # Add JZ3 files with label 0
+    for fname in jz3_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
+
+    # Add JZ4 files with label 0
+    for fname in jz4_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
 
     # Add Gammatautau files with label 1
     for fname in gammatautau_files:
