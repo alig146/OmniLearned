@@ -93,20 +93,29 @@ PLOT_STYLE = dict(fontsize_label=12, fontsize_legend=10, fontsize_title=13, dpi=
 # ---------------------------------------------------------------------------
 
 
-def load_data(filepath):
+def load_data(filepath, max_events=None):
     """Load HDF5 data."""
     print(f"Loading data from {filepath}...")
+    if max_events is not None:
+        print(f"  Only loading up to {max_events} events...")
     with h5py.File(filepath, "r") as f:
+        n_total = f["pid"].shape[0]
+        if max_events is None or max_events >= n_total:
+            slc = slice(None)
+        else:
+            # Random subset without replacement; sorted indices for stable HDF5 fancy indexing.
+            slc = np.sort(np.random.choice(n_total, size=max_events, replace=False))
         data = {
-            "clusters":          f["data"][:],
-            "tracks":            f["tracks"][:],
-            "cells_per_cluster": f["cells_per_cluster"][:],
-            "pid":               f["pid"][:],
-            "decay_mode":        f["decay_mode"][:],
+            "clusters":          f["data"][slc],
+            "tracks":            f["tracks"][slc],
+            "cells_per_cluster": f["cells_per_cluster"][slc],
+            "pid":               f["pid"][slc],
+            "decay_mode":        f["decay_mode"][slc],
         }
+
         for key in ("tau_targets", "charged_pion_targets", "neutral_pion_targets"):
             if key in f:
-                data[key] = f[key][:]
+                data[key] = f[key][slc]
 
     print(f"  Loaded {len(data['pid'])} jets")
     print(f"  Clusters shape:          {data['clusters'].shape}")
@@ -168,7 +177,14 @@ def flatten_cells(cells_per_cluster):
 
 def _safe_feature_name(feature_name):
     """Convert a feature name to a filesystem-safe string."""
-    return feature_name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+    return (
+        feature_name.replace(" ", "_")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .lower()
+    )
 
 
 def _clip_and_hist(ax, values, label, color, bins=50):
@@ -663,39 +679,71 @@ def plot_summary_stats(data, output_dir):
 
 
 def plot_2d_correlations(data, output_dir):
-    """Plot 2D Eta-Phi positions for clusters and cells."""
+    """Plot regular 2D DeltaEta-DeltaPhi heatmaps per PID class and decay mode."""
     print("\nPlotting 2D correlations...")
     clusters   = data["clusters"]
     cells_flat = flatten_cells(data["cells_per_cluster"])
     pid        = data["pid"]
+    decay_mode = data["decay_mode"]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+    # Include explicit N/A mode for non-tau or missing decay-mode labels.
+    decay_mode_names = dict(DECAY_MODE_NAMES)
+    decay_mode_names[-1] = "N/A"
 
-    for idx, class_id in enumerate(CLASS_NAMES):
-        mask = pid == class_id
+    n_saved = 0
+    for class_id, class_name in CLASS_NAMES.items():
+        class_mask = pid == class_id
+        if np.sum(class_mask) == 0 or class_id != 1: 
+            continue
 
-        eta, phi = (get_valid_cluster_values(clusters[mask], feat) for feat in (4, 5))
-        if len(eta) > 50000:
-            sample_idx = np.random.choice(len(eta), 50000, replace=False)
-            eta, phi = eta[sample_idx], phi[sample_idx]
-        axes[0, idx].hexbin(eta, phi, gridsize=50, cmap="Blues", mincnt=1)
-        _apply_axis_style(axes[0, idx], "Eta", "Phi",
-                          f"{CLASS_NAMES[class_id]} Cluster Positions")
-        axes[0, idx].set_xlim(-0.5, 0.5)
-        axes[0, idx].set_ylim(-0.5, 0.5)
+        for dm_id, dm_name in decay_mode_names.items():
+            mask = class_mask & (decay_mode == dm_id)
+            if np.sum(mask) == 0:
+                continue
 
-        ceta, cphi = (get_valid_cell_values(cells_flat[mask], feat) for feat in (4, 5))
-        if len(ceta) > 50000:
-            sample_idx = np.random.choice(len(ceta), 50000, replace=False)
-            ceta, cphi = ceta[sample_idx], cphi[sample_idx]
-        axes[1, idx].hexbin(ceta, cphi, gridsize=50, cmap="Greens", mincnt=1)
-        _apply_axis_style(axes[1, idx], "Eta", "Phi",
-                          f"{CLASS_NAMES[class_id]} Cell Positions")
-        axes[1, idx].set_xlim(-0.5, 0.5)
-        axes[1, idx].set_ylim(-0.5, 0.5)
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    _save_and_close(fig, os.path.join(output_dir, "cluster_cell_2d_positions.png"))
-    print("  Saved cluster_cell_2d_positions.png")
+            eta, phi = (get_valid_cluster_values(clusters[mask], feat) for feat in (0, 1))
+            if len(eta) > 50000:
+                sample_idx = np.random.choice(len(eta), 50000, replace=False)
+                eta, phi = eta[sample_idx], phi[sample_idx]
+            axes[0].hist2d(
+                eta,
+                phi,
+                bins=20,
+                range=[[-0.5, 0.5], [-0.5, 0.5]],
+                cmap="viridis",
+                cmin=1,
+            )
+            _apply_axis_style(axes[0], "Delta Eta", "Delta Phi",
+                              f"{class_name} {dm_name} Cluster Positions")
+            axes[0].set_xlim(-0.5, 0.5)
+            axes[0].set_ylim(-0.5, 0.5)
+
+            ceta, cphi = (get_valid_cell_values(cells_flat[mask], feat) for feat in (0, 1))
+            if len(ceta) > 50000:
+                sample_idx = np.random.choice(len(ceta), 50000, replace=False)
+                ceta, cphi = ceta[sample_idx], cphi[sample_idx]
+            axes[1].hist2d(
+                ceta,
+                cphi,
+                bins=20,
+                range=[[-0.5, 0.5], [-0.5, 0.5]],
+                cmap="magma",
+                cmin=1,
+            )
+            _apply_axis_style(axes[1], "Delta Eta", "Delta Phi",
+                              f"{class_name} {dm_name} Cell Positions")
+            axes[1].set_xlim(-0.5, 0.5)
+            axes[1].set_ylim(-0.5, 0.5)
+
+            safe_class = _safe_feature_name(class_name)
+            safe_dm = _safe_feature_name(dm_name)
+            out_name = f"cluster_cell_2d_positions_{safe_class}_decay_mode_{safe_dm}.png"
+            _save_and_close(fig, os.path.join(output_dir, out_name))
+            n_saved += 1
+
+    print(f"  Saved {n_saved} PID x decay-mode 2D correlation plots")
 
 
 # ---------------------------------------------------------------------------
@@ -705,26 +753,28 @@ def plot_2d_correlations(data, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot feature distributions from HDF5 data")
-    parser.add_argument("--input",  type=str, default="/global/cfs/cdirs/m2616/TauCPML/DataTesting/processed_h5/tau/val/data.h5",
+    parser.add_argument("--input",  type=str, default="/pscratch/sd/m/milescb/processed_h5_old/tau/val/data.h5",
                         help="Path to input HDF5 file")
     parser.add_argument("--output", type=str, default="plots/",
                         help="Output directory for plots")
+    parser.add_argument("--max-events", type=int, default=None,
+                        help="Maximum number of events to load (for faster testing)")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
-    data = load_data(args.input)
+    data = load_data(args.input, max_events=args.max_events)
 
-    #plot_summary_stats(data, args.output)
-    #plot_cluster_features(data, args.output)
-    #plot_track_features(data, args.output)
-    #plot_cell_features(data, args.output)
-    #plot_decay_mode_features(data, args.output)
-    #plot_cell_features_by_decay_mode(data, args.output)
-    #plot_truth_targets(data, args.output)
-    #plot_2d_correlations(data, args.output)
+    # plot_summary_stats(data, args.output)
+    # plot_cluster_features(data, args.output)
+    # plot_track_features(data, args.output)
+    # plot_cell_features(data, args.output)
+    # plot_decay_mode_features(data, args.output)
+    # plot_cell_features_by_decay_mode(data, args.output)
+    # plot_truth_targets(data, args.output)
+    plot_2d_correlations(data, args.output)
     #plot_percluster_features(data, args.output)
     #plot_pertrack_features(data, args.output)
-    plot_perindex_decay_mode_features(data, args.output)
+    # plot_perindex_decay_mode_features(data, args.output)
 
     print(f"\nAll plots saved to {args.output}")
     print("\nGenerated files:")
