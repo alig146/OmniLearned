@@ -37,7 +37,7 @@ import shutil
 # Configuration
 MAX_CLUSTERS = 20
 MAX_TRACKS = 20
-MAX_CELLS_PER_CLUSTER = 20
+MAX_CELLS_PER_CLUSTER = 10
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -113,26 +113,43 @@ NEUTRAL_PION_BRANCHES = [
 ]
 PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
+TAUTRACK_CLASSIFICATION_BRANCHES = [
+    ("trk_truthType", "trk_truthType", False), # Could be trk_originClass (need to double-check) # 0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT
+]
+
+
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
 NUM_CELL_FEATURES = len(CELL_BRANCHES)
 NUM_TAU_REGRESSION_TARGETS = len(TAU_REGRESSION_TARGETS)
 NUM_PION_FEATURES = 3  # pt, eta, phi
+NUM_TAU_TRACK_CLASSIFICATION_TARGETS = len(TAUTRACK_CLASSIFICATION_BRANCHES)
+
 
 OTHER_BRANCHES = [
     "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
 ]
 
-def get_all_branches():
-    """Get list of all branches to read."""
+def get_all_branches(label=None, use_cells=True):
+    """Get list of all branches to read. Only includes cell branches for tau (label=1)."""
     branches = []
-    branches += [b for _, b, _ in CELL_BRANCHES]
+
+    if label == 1:
+        if use_cells:
+            branches += [b for _, b, _ in CELL_BRANCHES] # Only attempt to read cell branches for tau events (label 1)
+        branches += [b for _, b, _ in TAUTRACK_CLASSIFICATION_BRANCHES] # Only needs to read tau track classification branches for tau events (label 1)
+
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
     branches += [b for _, b, _ in TAU_REGRESSION_TARGETS]
     branches += [b for _, b, _ in PION_REGRESSION_TARGETS]
     branches += OTHER_BRANCHES
     return list(set(branches))
+
+
+def _list_root_files(dir_path):
+    """List only ROOT files to avoid sidecar files such as .asetup.save."""
+    return sorted([f for f in os.listdir(dir_path) if f.endswith(".root")])
 
 
 def _pad_and_convert(arr, max_items):
@@ -169,12 +186,13 @@ def _vectorized_scalar_targets(events, feature_specs):
         out[:, feat_idx] = arr
     return out
 
-def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None):
-    """Build (N, max_clusters, max_cells_pc, N_features) preserving cluster->cell association.
-
+def _vectorized_cells_per_cluster(label, events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None, use_cells=True):
+    """Build tau cell tensor (N, max_clusters, max_cells_pc, N_features); return None for non-tau labels to avoid large zero allocations.
     Cell branches are doubly ragged: events x clusters x cells.
-    This function keeps the cluster structure intact instead of flattening.
-    """
+    This function keeps the cluster structure intact instead of flattening."""
+    if label != 1 or not use_cells:
+        return None
+
     n = len(events)
     n_feat = len(cell_specs)
     out = np.zeros((n, max_clusters, max_cells_pc, n_feat), dtype=np.float32)
@@ -207,7 +225,7 @@ def _vectorized_cells_per_cluster(events, cell_specs, max_clusters, max_cells_pc
     return out
 
 
-def _process_chunk(events, label, n_events_in_chunk):
+def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     """Vectorized chunk processing — operates on all events at once via awkward/numpy."""
     total_jets = len(events)
     
@@ -229,7 +247,7 @@ def _process_chunk(events, label, n_events_in_chunk):
 
     # Cells per cluster — preserves cluster association (uses pre-sort csort)
     chunk_cells_pc = _vectorized_cells_per_cluster(
-        events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER)
+        label, events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, use_cells=use_cells)
 
     # Labels
     chunk_pid = np.full(total_jets, label, dtype=np.int32)
@@ -250,11 +268,15 @@ def _process_chunk(events, label, n_events_in_chunk):
     chunk_neutral_pion_targets = _vectorized_point_cloud(
         events, NEUTRAL_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
 
+    # Tau Track targets - only for tau jets, else None to avoid large zero arrays
+    ### TO-DO ONGOING EDITS HERE
+    chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
+
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
-            chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets)
+            chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets, chunk_tau_track_targets)
 
 
-def process_file(filepath, label, chunk_size="500 MB"):
+def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
     """
     Process a single ROOT file with chunked reading (memory-efficient for large files).
 
@@ -281,7 +303,7 @@ def process_file(filepath, label, chunk_size="500 MB"):
         print(f"File {filepath} is empty, skipping...")
         return None, None, None, None, None, None, None, None
 
-    branches = get_all_branches()
+    branches = get_all_branches(label=label, use_cells=use_cells)
     chunk_results = []
 
     for chunk_batch in tqdm(
@@ -290,7 +312,7 @@ def process_file(filepath, label, chunk_size="500 MB"):
         leave=False,
     ):
         n_in_chunk = len(chunk_batch)
-        result = _process_chunk(chunk_batch, label, n_in_chunk)
+        result = _process_chunk(chunk_batch, label, n_in_chunk, use_cells=use_cells)
         if result is not None:
             chunk_results.append(result)
         del chunk_batch
@@ -301,43 +323,66 @@ def process_file(filepath, label, chunk_size="500 MB"):
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
-    all_cells_pc = np.concatenate([r[2] for r in chunk_results], axis=0)
+    all_cells_pc = np.concatenate([r[2] for r in chunk_results], axis=0) if (label == 1 and use_cells) else None
     all_pid = np.concatenate([r[3] for r in chunk_results], axis=0)
     all_decay_mode = np.concatenate([r[4] for r in chunk_results], axis=0)
     all_tau_targets = np.concatenate([r[5] for r in chunk_results], axis=0)
     all_charged_pion_targets = np.concatenate([r[6] for r in chunk_results], axis=0)
     all_neutral_pion_targets = np.concatenate([r[7] for r in chunk_results], axis=0)
+    all_tau_track_targets = np.concatenate([r[8] for r in chunk_results], axis=0) if label == 1 else None
     del chunk_results
 
+    cell_shape_msg = all_cells_pc.shape if all_cells_pc is not None else f"({len(all_data)}, {MAX_CLUSTERS}, {MAX_CELLS_PER_CLUSTER}, {NUM_CELL_FEATURES}) [zero-filled on write]"
     print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, "
-          f"cells_pc={all_cells_pc.shape}, tau_targets={all_tau_targets.shape}, "
+          f"cells_pc={cell_shape_msg}, tau_targets={all_tau_targets.shape}, "
           f"charged_pion_targets={all_charged_pion_targets.shape}, "
-          f"neutral_pion_targets={all_neutral_pion_targets.shape}")
+          f"neutral_pion_targets={all_neutral_pion_targets.shape},"
+          f"tau_track_targets={all_tau_track_targets.shape if all_tau_track_targets is not None else 'N/A'}")
     return (all_data, all_tracks, all_cells_pc, all_pid, all_decay_mode,
-            all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets)
+            all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets, all_tau_track_targets)
 
 
 def _process_file_to_staging(args):
     """Worker: process one file and write to staging. Returns (staging_path, n_jets) or (None, 0)."""
-    filepath, label, chunk_size, staging_dir, file_idx = args
+    filepath, label, chunk_size, staging_dir, file_idx, use_cells = args
     try:
-        result = process_file(filepath, label, chunk_size=chunk_size)
+        result = process_file(filepath, label, chunk_size=chunk_size, use_cells=use_cells)
     except Exception as e:
         raise RuntimeError(f"Error processing {filepath}: {e}") from e
     if result is None or result[0] is None:
         return None, 0
-    data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets = result
+    data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
         hf.create_dataset("data", data=data, compression="gzip")
         hf.create_dataset("tracks", data=tracks, compression="gzip")
-        hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
+        if use_cells:
+            if cells_pc is not None:
+                hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
+            else:
+                hf.create_dataset(
+                    "cells_per_cluster",
+                    shape=(n_jets, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                    dtype=np.float32,
+                    compression="gzip",
+                    fillvalue=0.0,
+                )
         hf.create_dataset("pid", data=pid)
         hf.create_dataset("decay_mode", data=decay_mode)
         hf.create_dataset("tau_targets", data=tau_targets, compression="gzip")
         hf.create_dataset("charged_pion_targets", data=charged_pion_targets, compression="gzip")
         hf.create_dataset("neutral_pion_targets", data=neutral_pion_targets, compression="gzip")
+        if tau_track_targets is not None:
+            hf.create_dataset("tau_track_targets", data=tau_track_targets, compression="gzip")
+        else:
+            hf.create_dataset(
+                "tau_track_targets",
+                shape=(n_jets, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
+                dtype=np.float32, # Can be int, no?
+                compression="gzip",
+                fillvalue=0.0,
+            )
     return staging_path, n_jets
 
 
@@ -369,7 +414,14 @@ def main():
         default=9,
         help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
     )
+    parser.add_argument(
+        "--no_cells",
+        action="store_true",
+        default=False,
+        help="Skip reading and saving cell features (cells_per_cluster). Reduces memory and disk usage.",
+    )
     args = parser.parse_args()
+    use_cells = not args.no_cells
 
     # Parse chunk_size: int (entries) or str e.g. "500 MB" for uproot
     try:
@@ -384,10 +436,11 @@ def main():
         if args.label is None or args.output_file is None:
             parser.error("--label and --output_file are required with --input_file")
 
-        data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets = process_file(
+        data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = process_file(
             args.input_file,
             args.label,
             chunk_size=chunk_size,
+            use_cells=use_cells,
         )
 
         output_dir = os.path.dirname(os.path.abspath(args.output_file))
@@ -412,13 +465,14 @@ def main():
                     dtype=np.float32,
                     compression="gzip",
                 )
-                hf.create_dataset(
-                    "cells_per_cluster",
-                    shape=(0, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
-                    maxshape=(None, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
+                if use_cells:
+                    hf.create_dataset(
+                        "cells_per_cluster",
+                        shape=(0, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                        maxshape=(None, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                        dtype=np.float32,
+                        compression="gzip",
+                    )
                 hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
                 hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
                 hf.create_dataset(
@@ -442,39 +496,91 @@ def main():
                     dtype=np.float32,
                     compression="gzip",
                 )
+                hf.create_dataset(
+                    "tau_track_targets",
+                    shape=(0, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
+                    maxshape=(None, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
+                    dtype=np.float32, # Can be int, no?
+                    compression="gzip",
+                )
             else:
                 hf.create_dataset("data", data=data, compression="gzip")
                 hf.create_dataset("tracks", data=tracks, compression="gzip")
-                hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
+                if use_cells:
+                    if cells_pc is not None:
+                        hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
+                    else:
+                        hf.create_dataset(
+                            "cells_per_cluster",
+                            shape=(len(data), MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
+                            dtype=np.float32,
+                            compression="gzip",
+                            fillvalue=0.0,
+                        )
                 hf.create_dataset("pid", data=pid)
                 hf.create_dataset("decay_mode", data=decay_mode)
                 hf.create_dataset("tau_targets", data=tau_targets, compression="gzip")
                 hf.create_dataset("charged_pion_targets", data=charged_pion_targets, compression="gzip")
                 hf.create_dataset("neutral_pion_targets", data=neutral_pion_targets, compression="gzip")
+                if tau_track_targets is not None:
+                    hf.create_dataset("tau_track_targets", data=tau_track_targets, compression="gzip")
+                else:
+                    hf.create_dataset(
+                        "tau_track_targets",
+                        shape=(len(data), MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
+                        dtype=np.float32, # Can be int, no?
+                        compression="gzip",
+                        fillvalue=0.0,
+                    )
 
         print("Done.")
         return
 
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    jz_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_17_26_Prod1_EXT0"
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_17_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_17_26_Prod1_EXT0"
-    
-    # JZ2 files (label 0)
-    jz2_files = os.listdir(os.path.join(args.input_dir, jz_rucio_name))
-    
+
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_03_23_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_03_23_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_23_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_03_23_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_03_23_26_Prod1_EXT0"
+
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_23_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
+
+
+    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))
+
     # Gammatautau files (label 1)
-    gammatautau_files = os.listdir(os.path.join(args.input_dir, tautau_rucio_name))
+    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))
     
     # Gammaee files (label 2)
-    gammaee_files = os.listdir(os.path.join(args.input_dir, ee_rucio_name))
+    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))
     
     files_and_labels = []
 
+    # Add JZ0 files with label 0
+    for fname in jz0_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
+
+    # Add JZ1 files with label 0
+    for fname in jz1_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
+
     # Add JZ2 files with label 0
     for fname in jz2_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz_rucio_name, fname), 0))
+        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
+
+    # Add JZ3 files with label 0
+    for fname in jz3_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
+
+    # Add JZ4 files with label 0
+    for fname in jz4_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
 
     # Add Gammatautau files with label 1
     for fname in gammatautau_files:
@@ -499,7 +605,7 @@ def main():
     os.makedirs(staging_dir, exist_ok=True)
 
     worker_args = [
-        (fp, lb, chunk_size, staging_dir, idx)
+        (fp, lb, chunk_size, staging_dir, idx, use_cells)
         for idx, (fp, lb) in enumerate(valid_files)
     ]
 
@@ -569,18 +675,19 @@ def main():
             with h5py.File(staging_path, "r") as sf:
                 data = sf["data"][:]
                 tracks = sf["tracks"][:]
-                cells_pc = sf["cells_per_cluster"][:]
+                cells_pc = sf["cells_per_cluster"][:] if use_cells else None
                 pid = sf["pid"][:]
                 decay_mode = sf["decay_mode"][:]
                 tau_targets = sf["tau_targets"][:]
                 charged_pion_targets = sf["charged_pion_targets"][:]
                 neutral_pion_targets = sf["neutral_pion_targets"][:]
+                tau_track_targets = sf["tau_track_targets"][:]
 
             if sample_shapes is None:
                 sample_shapes = (
-                    data.shape[1:], tracks.shape[1:], cells_pc.shape[1:],
+                    data.shape[1:], tracks.shape[1:], cells_pc.shape[1:] if use_cells else None,
                     tau_targets.shape[1:], charged_pion_targets.shape[1:],
-                    neutral_pion_targets.shape[1:],
+                    neutral_pion_targets.shape[1:], tau_track_targets.shape[1:]
                 )
 
             n = len(data)
@@ -594,31 +701,36 @@ def main():
                     continue
                 d = data[mask]
                 t = tracks[mask]
-                cpc = cells_pc[mask]
+                cpc = cells_pc[mask] if use_cells else None
                 p = pid[mask]
                 dm = decay_mode[mask]
                 tt = tau_targets[mask]
                 cpt = charged_pion_targets[mask]
                 npt = neutral_pion_targets[mask]
+                ttt = tau_track_targets[mask]
                 fp = split_files[split_name]
                 if split_name not in h5_handles:
                     h5_handles[split_name] = h5py.File(fp, "w")
                     h5_handles[split_name].create_dataset("data", data=d, compression="gzip", maxshape=(None,) + d.shape[1:])
                     h5_handles[split_name].create_dataset("tracks", data=t, compression="gzip", maxshape=(None,) + t.shape[1:])
-                    h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc, compression="gzip", maxshape=(None,) + cpc.shape[1:])
+                    if use_cells:
+                        h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc, compression="gzip", maxshape=(None,) + cpc.shape[1:])
                     h5_handles[split_name].create_dataset("pid", data=p, maxshape=(None,))
                     h5_handles[split_name].create_dataset("decay_mode", data=dm, maxshape=(None,))
                     h5_handles[split_name].create_dataset("tau_targets", data=tt, compression="gzip", maxshape=(None,) + tt.shape[1:])
                     h5_handles[split_name].create_dataset("charged_pion_targets", data=cpt, compression="gzip", maxshape=(None,) + cpt.shape[1:])
                     h5_handles[split_name].create_dataset("neutral_pion_targets", data=npt, compression="gzip", maxshape=(None,) + npt.shape[1:])
+                    h5_handles[split_name].create_dataset("tau_track_targets", data=ttt, compression="gzip", maxshape=(None,) + ttt.shape[1:])
                     split_offsets[split_name] = len(d)
                 else:
                     hf = h5_handles[split_name]
+                    cells_items = [("cells_per_cluster", cpc)] if use_cells else []
                     for ds_name, arr in [
-                        ("data", d), ("tracks", t), ("cells_per_cluster", cpc),
+                        ("data", d), ("tracks", t), *cells_items,
                         ("pid", p), ("decay_mode", dm),
                         ("tau_targets", tt),
                         ("charged_pion_targets", cpt), ("neutral_pion_targets", npt),
+                        ("tau_track_targets", ttt)
                     ]:
                         hf[ds_name].resize(split_offsets[split_name] + len(arr), axis=0)
                         hf[ds_name][split_offsets[split_name]:] = arr
@@ -629,18 +741,20 @@ def main():
 
     # Create empty HDF5 for splits that received no data (dataloader expects all splits to exist)
     if sample_shapes is not None:
-        cluster_shp, track_shp, cell_pc_shp, tau_shp, cpt_shp, npt_shp = sample_shapes
+        cluster_shp, track_shp, cell_pc_shp, tau_shp, cpt_shp, npt_shp, ttt_shp = sample_shapes
         for split_name in split_paths:
             if split_name not in h5_handles:
                 with h5py.File(split_files[split_name], "w") as hf:
                     hf.create_dataset("data", shape=(0,) + cluster_shp, maxshape=(None,) + cluster_shp, compression="gzip")
                     hf.create_dataset("tracks", shape=(0,) + track_shp, maxshape=(None,) + track_shp, compression="gzip")
-                    hf.create_dataset("cells_per_cluster", shape=(0,) + cell_pc_shp, maxshape=(None,) + cell_pc_shp, compression="gzip")
+                    if use_cells and cell_pc_shp is not None:
+                        hf.create_dataset("cells_per_cluster", shape=(0,) + cell_pc_shp, maxshape=(None,) + cell_pc_shp, compression="gzip")
                     hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
                     hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
                     hf.create_dataset("tau_targets", shape=(0,) + tau_shp, maxshape=(None,) + tau_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("charged_pion_targets", shape=(0,) + cpt_shp, maxshape=(None,) + cpt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("neutral_pion_targets", shape=(0,) + npt_shp, maxshape=(None,) + npt_shp, dtype=np.float32, compression="gzip")
+                    hf.create_dataset("tau_track_targets", shape=(0,) + ttt_shp, maxshape=(None,) + ttt_shp, dtype=np.float32, compression="gzip")
 
     # Cleanup staging
     shutil.rmtree(staging_dir, ignore_errors=True)
@@ -694,6 +808,7 @@ def main():
         tau_shape = f["tau_targets"].shape
         cpt_shape = f["charged_pion_targets"].shape
         npt_shape = f["neutral_pion_targets"].shape
+        ttt_shape = f["tau_track_targets"].shape
     print(f"\n  data (clusters): (N, {dshape[1]}, {dshape[2]})")
     print(f"    - {MAX_CLUSTERS} clusters x {NUM_CLUSTER_FEATURES} features")
     print(f"    - First 4: dEta, dPhi, log(et), log(e)")
@@ -708,6 +823,8 @@ def main():
     print(f"    - up to {MAX_PION_REGRESSION_TARGETS} charged pions x {NUM_PION_FEATURES} features (pt, eta, phi), 0-padded")
     print(f"\n  neutral_pion_targets: (N, {npt_shape[1]}, {npt_shape[2]})")
     print(f"    - up to {MAX_PION_REGRESSION_TARGETS} neutral pions x {NUM_PION_FEATURES} features (pt, eta, phi), 0-padded")
+    print(f"\n  tau_track_targets: (N, {ttt_shape[1]}, {ttt_shape[2]})")
+    print(f"    - up to {MAX_TRACKS} tracks x {NUM_TAU_TRACK_CLASSIFICATION_TARGETS} features (tau_track_class), 0-padded")
     print(f"\nCluster features ({NUM_CLUSTER_FEATURES}):")
     for i, (name, _, _) in enumerate(CLUSTER_BRANCHES):
         print(f"    {i}: {name}")

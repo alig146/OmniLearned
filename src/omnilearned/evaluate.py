@@ -150,7 +150,9 @@ def test_step(
             if "tes" not in regression_truth_all:
                 regression_truth_all["tes"] = []
             regression_truth_all["tes"].append(torch.log(tau_targets[:, 0]))
-        
+            regression_truth_all.setdefault("tau_eta", []).append(tau_targets[:, 1])
+            regression_truth_all.setdefault("tau_phi", []).append(tau_targets[:, 2])
+
         if mode == "generator":
             if batch["pid"] is not None:
                 preds[-1] = torch.cat(

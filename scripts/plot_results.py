@@ -113,7 +113,7 @@ def analyze_primary_task(predictions, true_labels, class_names):
 
 
 # ---------------------------------------------------------------------------
-# Confusion matrices — one file per matrix
+# Confusion matrices
 # ---------------------------------------------------------------------------
 
 def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
@@ -123,8 +123,11 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
 
     # Raw counts
     fig, ax = plt.subplots(figsize=(6, 5))
-    ConfusionMatrixDisplay(cm, display_labels=class_names).plot(
+    ConfusionMatrixDisplay(cm.T, display_labels=class_names).plot(
         ax=ax, cmap='Blues', values_format='d')
+    ax.set_xlabel('Predicted label')
+    ax.set_ylabel('True label')
+    ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Counts')
     save_plot(fig, f'{output_dir}/confusion_matrix_counts.png')
@@ -132,8 +135,11 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
     # Normalised
     cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     fig, ax = plt.subplots(figsize=(6, 5))
-    ConfusionMatrixDisplay(cm_norm, display_labels=class_names).plot(
+    ConfusionMatrixDisplay(cm_norm.T, display_labels=class_names).plot(
         ax=ax, cmap='Blues', values_format='.3f')
+    ax.set_xlabel('Predicted label')
+    ax.set_ylabel('True label')
+    ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Normalised by True Label')
     save_plot(fig, f'{output_dir}/confusion_matrix_normalised.png')
@@ -313,8 +319,11 @@ def analyze_decay_mode(data, true_labels, output_dir):
     cm_dm = confusion_matrix(dm_true_valid, dm_pred_labels, labels=list(range(n_classes_plot)))
 
     fig, ax = plt.subplots(figsize=(7, 6))
-    ConfusionMatrixDisplay(cm_dm, display_labels=prong_names).plot(
+    ConfusionMatrixDisplay(cm_dm.T, display_labels=prong_names).plot(
         ax=ax, cmap='Oranges', values_format='d')
+    ax.set_xlabel('True label')
+    ax.set_ylabel('Predicted label')
+    ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Counts')
     save_plot(fig, f'{output_dir}/decay_mode_confusion_counts.png')
@@ -323,8 +332,11 @@ def analyze_decay_mode(data, true_labels, output_dir):
     cm_dm_norm = np.divide(cm_dm.astype('float'), row_sums, where=row_sums != 0,
                            out=np.zeros_like(cm_dm, dtype=float))
     fig, ax = plt.subplots(figsize=(7, 6))
-    ConfusionMatrixDisplay(cm_dm_norm, display_labels=prong_names).plot(
+    ConfusionMatrixDisplay(cm_dm_norm.T, display_labels=prong_names).plot(
         ax=ax, cmap='Oranges', values_format='.3f')
+    ax.set_xlabel('True label')
+    ax.set_ylabel('Predicted label')
+    ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Normalised by Truth')
     save_plot(fig, f'{output_dir}/decay_mode_confusion_normalised.png')
@@ -432,24 +444,41 @@ def analyze_regression_task(data, true_labels, output_dir):
             'correlation': correlation, 'r_squared': r_squared,
         }
 
-        _plot_regression_task(ground_truth, predictions, task_name, output_dir)
+        _plot_regression_task(ground_truth, predictions, task_name, output_dir,
+                              log_scale=(task_name == "tes"))
 
     return results
 
 
-def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
-    """Save one plot per regression diagnostic."""
+def _plot_regression_task(ground_truth, predictions, task_name, output_dir, log_scale=False):
+    """Save one plot per regression diagnostic.
+
+    Parameters
+    ----------
+    log_scale : bool
+        If True, apply exp() before plotting the scatter and compute a
+        multiplicative response (exp(pred - truth)).  Use for targets stored
+        in log space (e.g. log-pt / tes).  Leave False for targets in natural
+        units (eta, phi).
+    """
     residuals = predictions - ground_truth
-    min_val = min(ground_truth.min(), predictions.min())
-    max_val = max(ground_truth.max(), predictions.max())
 
     # Prediction vs ground truth
+    if log_scale:
+        gt_plot = np.exp(ground_truth)
+        pred_plot = np.exp(predictions)
+    else:
+        gt_plot = ground_truth
+        pred_plot = predictions
+    min_val = min(gt_plot.min(), pred_plot.min())
+    max_val = max(gt_plot.max(), pred_plot.max())
+
     fig, ax = setup_plot(
         xlabel='Ground Truth',
         ylabel='Prediction',
         title=f'{task_name}: Prediction vs Ground Truth',
     )
-    ax.scatter(np.exp(ground_truth), np.exp(predictions), alpha=0.5, s=10)
+    ax.scatter(gt_plot, pred_plot, alpha=0.5, s=10)
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect prediction')
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_pred_vs_truth.png')
@@ -465,39 +494,42 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
     save_plot(fig, f'{output_dir}/{task_name}_residual_dist.png')
 
     # Overlaid truth vs prediction distributions
+    
+    bins = np.linspace(min(ground_truth.min(), predictions.min()),
+                    max(ground_truth.max(), predictions.max()), 51)
+    
     fig, ax = setup_plot(
         xlabel=f'{task_name}',
         ylabel='Density',
         title=f'{task_name}: Truth vs Prediction',
     )
-    ax.hist(ground_truth, bins=50, label='Truth', color='steelblue', histtype="step")
-    ax.hist(predictions, bins=50, label='Predictions', color='orange', histtype="step")
+    ax.hist(ground_truth, bins=bins, label='Truth', color='steelblue', histtype="step")
+    ax.hist(predictions, bins=bins, label='Predictions', color='orange', histtype="step")
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_pred_dist.png')
 
-    bins = np.linspace(min(ground_truth.min(), predictions.min()),
-                       max(ground_truth.max(), predictions.max()), 51)
     gt_counts, gt_edges = np.histogram(ground_truth, bins=bins)
     pred_counts, pred_edges = np.histogram(predictions, bins=bins)
     print(f'  {task_name} histogram integral — truth: {np.sum(gt_counts * np.diff(gt_edges)):.4f}, '
           f'pred: {np.sum(pred_counts * np.diff(pred_edges)):.4f}')
 
-    # Response: exp(pred - truth) in log space → ratio clustered around 1.0
-    nonzero = ground_truth != 0
-    if nonzero.sum() > 0:
-        response = np.exp(predictions[nonzero] - ground_truth[nonzero])
-        fig, ax = setup_plot(
-            xlabel='Response (Prediction / Truth)',
-            ylabel='Density',
-            title=f'{task_name}: Response',
-            xlim=[0, 2],
-        )
-        ax.hist(response, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
-        ax.axvline(x=1.0, color='r', linestyle='--', lw=2, label='Perfect response')
-        ax.axvline(x=float(np.median(response)), color='k', linestyle='-', lw=1.5,
-                   label=f'Median = {np.median(response):.3f}')
-        ax.legend()
-        save_plot(fig, f'{output_dir}/{task_name}_response.png')
+    # Response: exp(pred - truth) → ratio around 1.0, only valid for log-space targets
+    if log_scale:
+        nonzero = ground_truth != 0
+        if nonzero.sum() > 0:
+            response = np.exp(predictions[nonzero] - ground_truth[nonzero])
+            fig, ax = setup_plot(
+                xlabel='Response (Prediction / Truth)',
+                ylabel='Density',
+                title=f'{task_name}: Response',
+                xlim=[0, 2],
+            )
+            ax.hist(response, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
+            ax.axvline(x=1.0, color='r', linestyle='--', lw=2, label='Perfect response')
+            ax.axvline(x=float(np.median(response)), color='k', linestyle='-', lw=1.5,
+                       label=f'Median = {np.median(response):.3f}')
+            ax.legend()
+            save_plot(fig, f'{output_dir}/{task_name}_response.png')
 
 
 # ---------------------------------------------------------------------------

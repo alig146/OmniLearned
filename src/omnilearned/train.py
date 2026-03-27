@@ -134,6 +134,10 @@ def train_step(
             tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
             aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
             aux_masks["tes"] = (y == 1)  # Only tau samples
+            aux_labels["tau_eta"] = tau_targets[:, 1]
+            aux_masks["tau_eta"] = (y == 1)
+            aux_labels["tau_phi"] = tau_targets[:, 2]
+            aux_masks["tau_phi"] = (y == 1)
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -264,6 +268,10 @@ def val_step(
             tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
             aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
             aux_masks["tes"] = (y == 1)  # Only tau samples
+            aux_labels["tau_eta"] = tau_targets[:, 1]
+            aux_masks["tau_eta"] = (y == 1)
+            aux_labels["tau_phi"] = tau_targets[:, 2]
+            aux_masks["tau_phi"] = (y == 1)
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
