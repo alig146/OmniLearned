@@ -735,6 +735,57 @@ def plot_regression_targets(data, output_dir):
     print(f"  Saved regression_targets.png")
 
 
+def plot_regression_targets(data, output_dir):
+    """Plot all regression target distributions by class."""
+    if "targets" not in data or len(data["targets"]) == 0:
+        print("\nNo regression targets found, skipping...")
+        return
+    
+    print("\nPlotting regression targets...")
+    
+    targets = data["targets"]
+    pid = data["pid"]
+    n_targets = len(REGRESSION_TARGET_NAMES)
+    n_cols = 3
+    n_rows = (n_targets + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+    axes = axes.flatten()
+    
+    for i in range(n_targets):
+        
+        ax = axes[i]
+        target_name = REGRESSION_TARGET_NAMES[i] if i < len(REGRESSION_TARGET_NAMES) else f"Target {i}"
+        
+        for class_id in [0, 1, 2]:
+            mask = pid == class_id
+            if mask.sum() == 0:
+                continue
+            values = get_valid_target_values(targets[mask], i)
+            if len(values) > 0:
+                # Remove extreme outliers for better visualization
+                if len(values) > 10:
+                    p1, p99 = np.percentile(values, [1, 99])
+                    values_clipped = values[(values >= p1) & (values <= p99)]
+                    if len(values_clipped) > 0:
+                        ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
+                            label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+        
+        ax.set_xlabel(target_name)
+        ax.set_ylabel("Density")
+        ax.legend()
+        ax.set_title(f"Regression Target: {target_name}")
+    
+    # Hide unused subplots
+    for i in range(n_targets, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "regression_targets.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved regression_targets.png")
+
+
 def plot_2d_correlations(data, output_dir):
     """Plot regular 2D DeltaEta-DeltaPhi heatmaps per PID class and decay mode."""
     print("\nPlotting 2D correlations...")
@@ -821,17 +872,17 @@ def main():
     os.makedirs(args.output, exist_ok=True)
     data = load_data(args.input, max_events=args.max_events)
 
-    # plot_summary_stats(data, args.output)
-    # plot_cluster_features(data, args.output)
-    # plot_track_features(data, args.output)
-    # plot_cell_features(data, args.output)
-    # plot_decay_mode_features(data, args.output)
-    # plot_cell_features_by_decay_mode(data, args.output)
-    # plot_truth_targets(data, args.output)
+    plot_summary_stats(data, args.output)
+    plot_cluster_features(data, args.output)
+    plot_track_features(data, args.output)
+    plot_cell_features(data, args.output)
+    plot_decay_mode_features(data, args.output)
+    plot_cell_features_by_decay_mode(data, args.output)
+    plot_truth_targets(data, args.output)
     plot_2d_correlations(data, args.output)
-    #plot_percluster_features(data, args.output)
-    #plot_pertrack_features(data, args.output)
-    # plot_perindex_decay_mode_features(data, args.output)
+    plot_percluster_features(data, args.output)
+    plot_pertrack_features(data, args.output)
+    plot_perindex_decay_mode_features(data, args.output)
 
     print(f"\nAll plots saved to {args.output}")
     print("\nGenerated files:")

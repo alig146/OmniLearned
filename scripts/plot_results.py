@@ -560,6 +560,13 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, regression_results
             print(f"  RMSE: {metrics['rmse']:.6f}")
             print(f"  R²:   {metrics['r_squared']:.4f}")
 
+    if regression_results:
+        for task_name, metrics in regression_results.items():
+            print(f"\n[AUXILIARY TASK] {task_name.upper()} (Regression)")
+            print(f"  MAE:  {metrics['mae']:.6f}")
+            print(f"  RMSE: {metrics['rmse']:.6f}")
+            print(f"  R²:   {metrics['r_squared']:.4f}")
+
     print("\n" + "=" * 60)
 
 
