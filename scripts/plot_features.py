@@ -93,7 +93,7 @@ PLOT_STYLE = dict(fontsize_label=12, fontsize_legend=10, fontsize_title=13, dpi=
 # ---------------------------------------------------------------------------
 
 
-def load_data(filepath, max_events=None):
+def load_data(filepath, max_events=None, load_cells=False):
     """Load HDF5 data."""
     print(f"Loading data from {filepath}...")
     if max_events is not None:
@@ -106,12 +106,13 @@ def load_data(filepath, max_events=None):
             # Random subset without replacement; sorted indices for stable HDF5 fancy indexing.
             slc = np.sort(np.random.choice(n_total, size=max_events, replace=False))
         data = {
-            "clusters":          f["data"][slc],
-            "tracks":            f["tracks"][slc],
-            "cells_per_cluster": f["cells_per_cluster"][slc],
-            "pid":               f["pid"][slc],
-            "decay_mode":        f["decay_mode"][slc],
+            "clusters":  f["data"][slc],
+            "tracks":    f["tracks"][slc],
+            "pid":       f["pid"][slc],
+            "decay_mode": f["decay_mode"][slc],
         }
+        if load_cells and "cells_per_cluster" in f:
+            data["cells_per_cluster"] = f["cells_per_cluster"][slc]
 
         for key in ("tau_targets", "charged_pion_targets", "neutral_pion_targets"):
             if key in f:
@@ -120,7 +121,8 @@ def load_data(filepath, max_events=None):
     print(f"  Loaded {len(data['pid'])} jets")
     print(f"  Clusters shape:          {data['clusters'].shape}")
     print(f"  Tracks shape:            {data['tracks'].shape}")
-    print(f"  Cells per cluster shape: {data['cells_per_cluster'].shape}")
+    if "cells_per_cluster" in data:
+        print(f"  Cells per cluster shape: {data['cells_per_cluster'].shape}")
     for key in ("tau_targets", "charged_pion_targets", "neutral_pion_targets"):
         if key in data:
             print(f"  {key} shape: {data[key].shape}")
@@ -200,7 +202,7 @@ def _clip_and_hist(ax, values, label, color, bins=50):
     p1, p99 = np.percentile(values, [1, 99])
     clipped = values[(values >= p1) & (values <= p99)]
     if len(clipped) > 0:
-        ax.hist(clipped, bins=bins, alpha=0.5, density=True, label=label, color=color)
+        ax.hist(clipped, bins=bins, alpha=0.5, density=True, label=label, color=color, histtype='step')
 
 
 def _apply_axis_style(ax, xlabel, ylabel, title):
@@ -650,7 +652,7 @@ def plot_summary_stats(data, output_dir):
     for class_id in CLASS_NAMES:
         mask = pid == class_id
         ax.hist(n_clusters[mask], bins=range(0, MAX_CLUSTERS+1), alpha=0.5, density=True,
-                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id], histtype='step')
     _apply_axis_style(ax, "Number of Clusters", "Density", "Clusters per Jet")
     ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
 
@@ -661,19 +663,19 @@ def plot_summary_stats(data, output_dir):
     for class_id in CLASS_NAMES:
         mask = pid == class_id
         ax.hist(n_tracks[mask], bins=range(0, MAX_TRACKS+1), alpha=0.5, density=True,
-                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+                label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id], histtype='step')
     _apply_axis_style(ax, "Number of Tracks", "Density", "Tracks per Jet")
     ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
 
     # Cells per cluster distribution (by class)
     ax = axes[1, 2]
-    reshaped = cells_pc.reshape(-1, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES)
-    n_cells = (reshaped[:, :, :, 3] != 0).sum(axis=1)
     if cells_pc is not None:
+        reshaped = cells_pc.reshape(-1, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES)
+        n_cells = (reshaped[:, :, :, 3] != 0).sum(axis=1)
         for class_id in CLASS_NAMES:
             mask = pid == class_id
             ax.hist(n_cells[mask].flatten(), bins=range(0, MAX_CELLS_PER_CLUSTER+1),
-                    alpha=0.5, density=True, label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+                    alpha=0.5, density=True, label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id], histtype='step')
         _apply_axis_style(ax, "Number of Cells per Cluster", "Density",
                           "Cells per Cluster Distribution")
         ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
@@ -718,58 +720,7 @@ def plot_regression_targets(data, output_dir):
                     values_clipped = values[(values >= p1) & (values <= p99)]
                     if len(values_clipped) > 0:
                         ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
-                            label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
-        
-        ax.set_xlabel(target_name)
-        ax.set_ylabel("Density")
-        ax.legend()
-        ax.set_title(f"Regression Target: {target_name}")
-    
-    # Hide unused subplots
-    for i in range(n_targets, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "regression_targets.png"), dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved regression_targets.png")
-
-
-def plot_regression_targets(data, output_dir):
-    """Plot all regression target distributions by class."""
-    if "targets" not in data or len(data["targets"]) == 0:
-        print("\nNo regression targets found, skipping...")
-        return
-    
-    print("\nPlotting regression targets...")
-    
-    targets = data["targets"]
-    pid = data["pid"]
-    n_targets = len(REGRESSION_TARGET_NAMES)
-    n_cols = 3
-    n_rows = (n_targets + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
-    axes = axes.flatten()
-    
-    for i in range(n_targets):
-        
-        ax = axes[i]
-        target_name = REGRESSION_TARGET_NAMES[i] if i < len(REGRESSION_TARGET_NAMES) else f"Target {i}"
-        
-        for class_id in [0, 1, 2]:
-            mask = pid == class_id
-            if mask.sum() == 0:
-                continue
-            values = get_valid_target_values(targets[mask], i)
-            if len(values) > 0:
-                # Remove extreme outliers for better visualization
-                if len(values) > 10:
-                    p1, p99 = np.percentile(values, [1, 99])
-                    values_clipped = values[(values >= p1) & (values <= p99)]
-                    if len(values_clipped) > 0:
-                        ax.hist(values_clipped, bins=50, alpha=0.5, density=True,
-                            label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id])
+                            label=CLASS_NAMES[class_id], color=CLASS_COLORS[class_id], histtype='step')
         
         ax.set_xlabel(target_name)
         ax.set_ylabel("Density")
@@ -790,7 +741,7 @@ def plot_2d_correlations(data, output_dir):
     """Plot regular 2D DeltaEta-DeltaPhi heatmaps per PID class and decay mode."""
     print("\nPlotting 2D correlations...")
     clusters   = data["clusters"]
-    cells_flat = flatten_cells(data["cells_per_cluster"])
+    cells_flat = flatten_cells(data["cells_per_cluster"]) if "cells_per_cluster" in data else None
     pid        = data["pid"]
     decay_mode = data["decay_mode"]
 
@@ -809,7 +760,10 @@ def plot_2d_correlations(data, output_dir):
             if np.sum(mask) == 0:
                 continue
 
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            n_cols = 2 if cells_flat is not None else 1
+            fig, axes = plt.subplots(1, n_cols, figsize=(6 * n_cols, 5))
+            if n_cols == 1:
+                axes = [axes]
 
             eta, phi = (get_valid_cluster_values(clusters[mask], feat) for feat in (0, 1))
             if len(eta) > 50000:
@@ -828,22 +782,23 @@ def plot_2d_correlations(data, output_dir):
             axes[0].set_xlim(-0.5, 0.5)
             axes[0].set_ylim(-0.5, 0.5)
 
-            ceta, cphi = (get_valid_cell_values(cells_flat[mask], feat) for feat in (0, 1))
-            if len(ceta) > 50000:
-                sample_idx = np.random.choice(len(ceta), 50000, replace=False)
-                ceta, cphi = ceta[sample_idx], cphi[sample_idx]
-            axes[1].hist2d(
-                ceta,
-                cphi,
-                bins=20,
-                range=[[-0.5, 0.5], [-0.5, 0.5]],
-                cmap="magma",
-                cmin=1,
-            )
-            _apply_axis_style(axes[1], "Delta Eta", "Delta Phi",
-                              f"{class_name} {dm_name} Cell Positions")
-            axes[1].set_xlim(-0.5, 0.5)
-            axes[1].set_ylim(-0.5, 0.5)
+            if cells_flat is not None:
+                ceta, cphi = (get_valid_cell_values(cells_flat[mask], feat) for feat in (0, 1))
+                if len(ceta) > 50000:
+                    sample_idx = np.random.choice(len(ceta), 50000, replace=False)
+                    ceta, cphi = ceta[sample_idx], cphi[sample_idx]
+                axes[1].hist2d(
+                    ceta,
+                    cphi,
+                    bins=20,
+                    range=[[-0.5, 0.5], [-0.5, 0.5]],
+                    cmap="magma",
+                    cmin=1,
+                )
+                _apply_axis_style(axes[1], "Delta Eta", "Delta Phi",
+                                  f"{class_name} {dm_name} Cell Positions")
+                axes[1].set_xlim(-0.5, 0.5)
+                axes[1].set_ylim(-0.5, 0.5)
 
             safe_class = _safe_feature_name(class_name)
             safe_dm = _safe_feature_name(dm_name)
@@ -861,28 +816,35 @@ def plot_2d_correlations(data, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot feature distributions from HDF5 data")
-    parser.add_argument("--input",  type=str, default="/pscratch/sd/m/milescb/processed_h5_old/tau/val/data.h5",
+    parser.add_argument("--input",  type=str, default="/pscratch/sd/m/milescb/processed_h5_new/tau/val/data.h5",
                         help="Path to input HDF5 file")
     parser.add_argument("--output", type=str, default="plots/",
                         help="Output directory for plots")
     parser.add_argument("--max-events", type=int, default=None,
                         help="Maximum number of events to load (for faster testing)")
+    parser.add_argument("--cells-per-cluster", action="store_true", default=False,
+                        help="Load and plot cells_per_cluster data")
+    parser.add_argument("--split-tracks-and-cells", action="store_true", default=False)
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
-    data = load_data(args.input, max_events=args.max_events)
+    data = load_data(args.input, max_events=args.max_events, load_cells=args.cells_per_cluster)
 
     plot_summary_stats(data, args.output)
     plot_cluster_features(data, args.output)
     plot_track_features(data, args.output)
-    plot_cell_features(data, args.output)
+    if args.cells_per_cluster:
+        plot_cell_features(data, args.output)
     plot_decay_mode_features(data, args.output)
-    plot_cell_features_by_decay_mode(data, args.output)
+    if args.cells_per_cluster:
+        plot_cell_features_by_decay_mode(data, args.output)
     plot_truth_targets(data, args.output)
     plot_2d_correlations(data, args.output)
-    plot_percluster_features(data, args.output)
-    plot_pertrack_features(data, args.output)
-    plot_perindex_decay_mode_features(data, args.output)
+    
+    if args.cells_per_cluster:
+        plot_percluster_features(data, args.output)
+        plot_pertrack_features(data, args.output)
+        plot_perindex_decay_mode_features(data, args.output)
 
     print(f"\nAll plots saved to {args.output}")
     print("\nGenerated files:")

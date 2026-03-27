@@ -398,7 +398,7 @@ def main():
                         default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/ntuples/",
                         help="Directory containing ROOT files")
     parser.add_argument("--output_dir", type=str,
-                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5/tau",
+                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5_no_cells_new/tau",
                         help="Directory to save HDF5 files")
     parser.add_argument("--train_frac", type=float, default=0.8)
     parser.add_argument("--val_frac", type=float, default=0.1)
@@ -417,7 +417,7 @@ def main():
     parser.add_argument(
         "--no_cells",
         action="store_true",
-        default=False,
+        default=True,
         help="Skip reading and saving cell features (cells_per_cluster). Reduces memory and disk usage.",
     )
     args = parser.parse_args()
@@ -804,7 +804,8 @@ def main():
     print("="*60)
     with h5py.File(split_files["train"], "r") as f:
         dshape, tshape = f["data"].shape, f["tracks"].shape
-        cpc_shape = f["cells_per_cluster"].shape
+        if use_cells:
+            cpc_shape = f["cells_per_cluster"].shape
         tau_shape = f["tau_targets"].shape
         cpt_shape = f["charged_pion_targets"].shape
         npt_shape = f["neutral_pion_targets"].shape
