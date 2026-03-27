@@ -144,14 +144,12 @@ def test_step(
         if batch.get("decay_mode") is not None:
             decay_modes.append(batch["decay_mode"].to(device))
         
-        # Collect regression truth labels if available
-        if batch.get("truth_targets") is not None:
-            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
-            tasks = ["tes"]  # Must match the task names in training
-            for idx, task in enumerate(tasks):
-                if task not in regression_truth_all:
-                    regression_truth_all[task] = []
-                regression_truth_all[task].append(truth_targets[:, idx])
+        # Collect regression truth labels — log(pt), consistent with training target
+        if batch.get("tau_targets") is not None:
+            tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
+            if "tes" not in regression_truth_all:
+                regression_truth_all["tes"] = []
+            regression_truth_all["tes"].append(torch.log(tau_targets[:, 0]))
         
         if mode == "generator":
             if batch["pid"] is not None:
@@ -181,7 +179,7 @@ def test_step(
     
     if is_master_node() and not regression_truth_all:
         print("WARNING: No regression truth labels were collected from batches.")
-        print("Make sure 'truth_targets' is included in the dataloader output.")
+        print("Make sure 'tau_targets' is included in the dataloader output.")
     
     return (
         preds,
@@ -227,6 +225,8 @@ def run(
     cell_dim: int = 14,
 ):
     local_rank, rank, size = ddp_setup()
+
+    do_regression_aux_tasks = bool(aux_regression_tasks_str)
 
     model_params = get_model_parameters(model_size)
 
@@ -303,6 +303,7 @@ def run(
         mode=mode,
         use_tracks=use_tracks,
         use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
         shuffle=False,
     )
     if rank == 0:

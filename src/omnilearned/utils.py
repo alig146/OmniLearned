@@ -311,9 +311,12 @@ def get_loss(
                 aux_pred = aux_pred[task_mask]
                 task_labels = task_labels[task_mask]
 
-            # Filter out invalid labels (e.g., -1 or Error=7) and out-of-range labels
-            num_classes_task = aux_pred.shape[-1]
-            valid = (task_labels >= 0) & (task_labels < num_classes_task)
+            # Filter out invalid labels; skip integer-range check for regression tasks
+            if task_type == "regression":
+                valid = torch.ones(len(task_labels), dtype=torch.bool, device=task_labels.device)
+            else:
+                num_classes_task = aux_pred.shape[-1]
+                valid = (task_labels >= 0) & (task_labels < num_classes_task)
             if not valid.any():
                 continue
             aux_pred = aux_pred[valid]

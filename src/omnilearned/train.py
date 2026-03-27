@@ -129,12 +129,11 @@ def train_step(
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
         
-        # Regression tasks
-        if batch.get("truth_targets") is not None:
-            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
-            tasks = ["tes"]
-            for idx, task in enumerate(tasks):
-                aux_labels[task] = truth_targets[:, idx]
+        # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
+        if batch.get("tau_targets") is not None:
+            tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
+            aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
+            aux_masks["tes"] = (y == 1)  # Only tau samples
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -260,12 +259,11 @@ def val_step(
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
         
-        # Regression tasks
-        if batch.get("truth_targets") is not None:
-            truth_targets = batch["truth_targets"].to(device)  # Shape: (batch, NUM_TARGETS)
-            tasks = ["tes"]
-            for idx, task in enumerate(tasks):
-                aux_labels[task] = truth_targets[:, idx]
+        # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
+        if batch.get("tau_targets") is not None:
+            tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
+            aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
+            aux_masks["tes"] = (y == 1)  # Only tau samples
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
@@ -489,6 +487,9 @@ def run(
 ):
     local_rank, rank, size = ddp_setup()
 
+    # Derive whether to load regression aux targets from dataloader
+    do_regression_aux_tasks = bool(aux_regression_tasks_str)
+
     # Parse regression task names
     regression_task_names = set()
     if aux_regression_tasks_str:
@@ -567,6 +568,7 @@ def run(
         nevts=nevts,
         use_tracks=use_tracks,
         use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
     )
     if rank == 0:
         print("**** Setup ****")
@@ -590,6 +592,7 @@ def run(
         mode=mode,
         use_tracks=use_tracks,
         use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
     )
 
     param_groups = get_param_groups(

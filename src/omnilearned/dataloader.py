@@ -42,7 +42,7 @@ def collate_point_cloud(batch, max_part=5000):
     result = {"X": truncated_X, "y": labels}
 
     sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
-    jet_level_fields = ["cond", "decay_mode"]
+    jet_level_fields = ["cond", "decay_mode", "tau_targets"]
     # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
     # cells_per_cluster shares the cluster dimension with X and must be truncated
@@ -142,6 +142,7 @@ class HEPDataset(Dataset):
         nevts=-1,
         use_tracks=False,
         use_cells=False,
+        do_regression_aux_tasks=False
     ):
         self.use_cond = use_cond
         self.use_pid = use_pid
@@ -151,6 +152,7 @@ class HEPDataset(Dataset):
         self.pid_idx = pid_idx
         self.num_add = num_add
         self.label_shift = label_shift
+        self.do_regression_aux_tasks = do_regression_aux_tasks
 
         self.file_paths = file_paths
         self._file_cache = {}
@@ -175,6 +177,8 @@ class HEPDataset(Dataset):
             keys.append("tracks")
         if self.use_cells:
             keys.append("cells_per_cluster")
+        if self.do_regression_aux_tasks:
+            keys.extend(["tau_targets", "charged_pion_targets", "neutral_pion_targets"])
         keys.extend(["decay_mode", "data_pid"])
         return keys
 
@@ -239,6 +243,7 @@ class HEPDataset(Dataset):
         decay_mode=None,
         tracks=None,
         cells_per_cluster=None,
+        tau_targets=None,
     ):
         sample = {}
 
@@ -283,9 +288,8 @@ class HEPDataset(Dataset):
             sample["cells_per_cluster"] = torch.tensor(cells_per_cluster, dtype=torch.float32)
             
         # Regression truth targets (e.g., TES correction)
-        # TODO: fix this guy
-        if "truth_targets" in sample:
-            sample["truth_targets"] = torch.tensor(sample["truth_targets"][sample_idx], dtype=torch.float32)
+        if tau_targets is not None and self.do_regression_aux_tasks:
+            sample["tau_targets"] = torch.tensor(tau_targets, dtype=torch.float32)
 
         return sample
 
@@ -298,6 +302,7 @@ class HEPDataset(Dataset):
         decay_mode = f["decay_mode"][sample_idx] if "decay_mode" in f else None
         tracks = f["tracks"][sample_idx] if self.use_tracks and "tracks" in f else None
         cells = f["cells_per_cluster"][sample_idx] if self.use_cells and "cells_per_cluster" in f else None
+        tau_targets = f["tau_targets"][sample_idx] if self.do_regression_aux_tasks and "tau_targets" in f else None
 
         return self._build_sample(
             f["data"][sample_idx],
@@ -307,6 +312,7 @@ class HEPDataset(Dataset):
             decay_mode=decay_mode,
             tracks=tracks,
             cells_per_cluster=cells,
+            tau_targets=tau_targets
         )
 
     def __getitems__(self, indices):
@@ -335,6 +341,7 @@ class HEPDataset(Dataset):
             batch_decay = f["decay_mode"][sorted_indices] if "decay_mode" in f else None
             batch_tracks = f["tracks"][sorted_indices] if self.use_tracks and "tracks" in f else None
             batch_cells = f["cells_per_cluster"][sorted_indices] if self.use_cells and "cells_per_cluster" in f else None
+            batch_tau_targets = f["tau_targets"][sorted_indices] if "tau_targets" in f else None
 
             for i, out_pos in enumerate(sorted_positions):
                 samples[out_pos] = self._build_sample(
@@ -345,6 +352,7 @@ class HEPDataset(Dataset):
                     decay_mode=batch_decay[i] if batch_decay is not None else None,
                     tracks=batch_tracks[i] if batch_tracks is not None else None,
                     cells_per_cluster=batch_cells[i] if batch_cells is not None else None,
+                    tau_targets=batch_tau_targets[i] if batch_tau_targets is not None else None,
                 )
 
         return samples
@@ -378,6 +386,7 @@ def load_data(
     nevts=-1,
     use_tracks=False,
     use_cells=False,
+    do_regression_aux_tasks=False,
 ):
     supported_datasets = [
         "top",
@@ -496,6 +505,7 @@ def load_data(
         nevts=nevts,
         use_tracks=use_tracks,
         use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
     )
 
     loader_kwargs = {

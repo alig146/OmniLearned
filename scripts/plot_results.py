@@ -361,83 +361,23 @@ def analyze_decay_mode(data, true_labels, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Electron vs QCD
-# ---------------------------------------------------------------------------
-
-def analyze_electron_vs_qcd(data, true_labels, output_dir):
-    """Analyze electron vs QCD auxiliary task."""
-    if 'aux_electron_vs_qcd_pred' not in data.keys():
-        print("\nNo electron_vs_qcd auxiliary predictions found.")
-        return None
-
-    print("\n" + "=" * 60)
-    print("AUXILIARY TASK 2: Electron vs QCD")
-    print("=" * 60)
-
-    evq_pred = data['aux_electron_vs_qcd_pred']
-    evq_mask = (true_labels == 0) | (true_labels == 2)
-    evq_pred_valid = evq_pred[evq_mask]
-    evq_true = (true_labels[evq_mask] == 2).astype(int)
-
-    print(f"\nElectron vs QCD samples: {evq_mask.sum()}")
-    print(f"  QCD jets: {(true_labels[evq_mask] == 0).sum()}")
-    print(f"  Electron jets: {(true_labels[evq_mask] == 2).sum()}")
-
-    evq_score = evq_pred_valid[:, 1]
-    fpr_evq, tpr_evq, _ = roc_curve(evq_true, evq_score)
-    auc_evq = auc(fpr_evq, tpr_evq)
-
-    print("Plotting electron vs QCD analysis...")
-
-    # ROC curve
-    fig, ax = setup_plot(
-        xlabel='False Positive Rate',
-        ylabel='True Positive Rate',
-        title='Electron vs QCD',
-        xlim=[0.0, 1.0],
-        ylim=[0.0, 1.0],
-    )
-    ax.plot(fpr_evq, tpr_evq, 'green', lw=2, label=f'AUC = {auc_evq:.4f}')
-    ax.plot([0, 1], [0, 1], 'k--', lw=1)
-    ax.legend(loc='lower right')
-    save_plot(fig, f'{output_dir}/electron_vs_qcd_roc.png')
-
-    # Score distribution
-    fig, ax = setup_plot(
-        xlabel='Electron Score',
-        ylabel='Density',
-        title='Electron vs QCD',
-        xlim=[0, 1],
-    )
-    ax.hist(evq_score[evq_true == 0], bins=50, alpha=0.6,
-            label='True QCD', color='red', density=True)
-    ax.hist(evq_score[evq_true == 1], bins=50, alpha=0.6,
-            label='True Electron', color='green', density=True)
-    ax.legend()
-    save_plot(fig, f'{output_dir}/electron_vs_qcd_score_dist.png')
-
-    evq_acc = accuracy_score(evq_true, (evq_score > 0.5).astype(int))
-    print(f"\nElectron vs QCD Accuracy: {evq_acc:.4f}")
-    print(f"Electron vs QCD AUC: {auc_evq:.4f}")
-
-    return auc_evq
-
-
-# ---------------------------------------------------------------------------
 # Regression tasks
 # ---------------------------------------------------------------------------
 
-def analyze_regression_task(data, output_dir):
+def analyze_regression_task(data, true_labels, output_dir):
     """Analyze regression auxiliary tasks."""
+    
     from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+    tau_mask = true_labels == 1
 
     regression_tasks = {}
     for key in data.keys():
-        print(key)
         if key.startswith('aux_') and key.endswith('_pred'):
             task_name = key.replace('aux_', '').replace('_pred', '')
-            if data[key].ndim == 1 or data[key].shape[1] == 1:
-                regression_tasks[task_name] = data[key].flatten()
+            arr = data[key][tau_mask]
+            if arr.ndim == 1 or arr.shape[1] == 1:
+                regression_tasks[task_name] = arr.flatten()
 
     if not regression_tasks:
         print("\nNo regression auxiliary predictions found.")
@@ -455,10 +395,21 @@ def analyze_regression_task(data, output_dir):
             print(f"\nWarning: No ground truth found for {task_name}, skipping.")
             continue
 
-        ground_truth = data[truth_key].flatten()
+        ground_truth = data[truth_key][tau_mask].flatten()
 
         if len(predictions) != len(ground_truth):
             print(f"\nWarning: Shape mismatch for {task_name}, skipping.")
+            continue
+
+        valid = np.isfinite(ground_truth) & np.isfinite(predictions)
+        n_dropped = (~valid).sum()
+        if n_dropped > 0:
+            print(f"\nWarning: Dropping {n_dropped} NaN/inf values for {task_name}.")
+        ground_truth = ground_truth[valid]
+        predictions = predictions[valid]
+
+        if len(ground_truth) == 0:
+            print(f"\nWarning: No valid samples for {task_name}, skipping.")
             continue
 
         mae = mean_absolute_error(ground_truth, predictions)
@@ -498,20 +449,10 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
         ylabel='Prediction',
         title=f'{task_name}: Prediction vs Ground Truth',
     )
-    ax.scatter(ground_truth, predictions, alpha=0.5, s=10)
+    ax.scatter(np.exp(ground_truth), np.exp(predictions), alpha=0.5, s=10)
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect prediction')
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_pred_vs_truth.png')
-
-    # Residuals vs ground truth
-    fig, ax = setup_plot(
-        xlabel='Ground Truth',
-        ylabel='Residuals',
-        title=f'{task_name}: Residual Plot',
-    )
-    ax.scatter(ground_truth, residuals, alpha=0.5, s=10)
-    ax.axhline(y=0, color='r', linestyle='--', lw=2)
-    save_plot(fig, f'{output_dir}/{task_name}_residuals.png')
 
     # Residual distribution
     fig, ax = setup_plot(
@@ -523,15 +464,40 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir):
     ax.axvline(x=0, color='r', linestyle='--', lw=2)
     save_plot(fig, f'{output_dir}/{task_name}_residual_dist.png')
 
-    # Prediction distribution
+    # Overlaid truth vs prediction distributions
     fig, ax = setup_plot(
-        xlabel=f'{task_name} Value',
+        xlabel=f'{task_name}',
         ylabel='Density',
-        title=f'{task_name}: Prediction Distribution',
+        title=f'{task_name}: Truth vs Prediction',
     )
-    ax.hist(predictions, bins=50, alpha=0.6, label='Predictions', density=True)
+    ax.hist(ground_truth, bins=50, label='Truth', color='steelblue', histtype="step")
+    ax.hist(predictions, bins=50, label='Predictions', color='orange', histtype="step")
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_pred_dist.png')
+
+    bins = np.linspace(min(ground_truth.min(), predictions.min()),
+                       max(ground_truth.max(), predictions.max()), 51)
+    gt_counts, gt_edges = np.histogram(ground_truth, bins=bins)
+    pred_counts, pred_edges = np.histogram(predictions, bins=bins)
+    print(f'  {task_name} histogram integral — truth: {np.sum(gt_counts * np.diff(gt_edges)):.4f}, '
+          f'pred: {np.sum(pred_counts * np.diff(pred_edges)):.4f}')
+
+    # Response: exp(pred - truth) in log space → ratio clustered around 1.0
+    nonzero = ground_truth != 0
+    if nonzero.sum() > 0:
+        response = np.exp(predictions[nonzero] - ground_truth[nonzero])
+        fig, ax = setup_plot(
+            xlabel='Response (Prediction / Truth)',
+            ylabel='Density',
+            title=f'{task_name}: Response',
+            xlim=[0, 2],
+        )
+        ax.hist(response, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
+        ax.axvline(x=1.0, color='r', linestyle='--', lw=2, label='Perfect response')
+        ax.axvline(x=float(np.median(response)), color='k', linestyle='-', lw=1.5,
+                   label=f'Median = {np.median(response):.3f}')
+        ax.legend()
+        save_plot(fig, f'{output_dir}/{task_name}_response.png')
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +539,7 @@ def plot_training_loss(training_json_path, output_dir):
 # Summary
 # ---------------------------------------------------------------------------
 
-def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regression_results=None):
+def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, regression_results=None):
     """Print final summary of all tasks."""
     print("\n" + "=" * 60)
     print("MULTI-TASK LEARNING SUMMARY")
@@ -586,10 +552,6 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regr
     if dm_accuracy is not None:
         print("\n[AUXILIARY TASK 1] Decay Mode (5-class)")
         print(f"  Accuracy: {dm_accuracy:.4f}")
-
-    if evq_auc is not None:
-        print("\n[AUXILIARY TASK 2] Electron vs QCD")
-        print(f"  AUC: {evq_auc:.4f}")
 
     if regression_results:
         for task_name, metrics in regression_results.items():
@@ -630,10 +592,9 @@ def main(results_path="results/outputs__tau_0.npz", output_dir="results",
     plot_tau_vs_qcd(predictions, true_labels, output_dir)
 
     dm_accuracy = analyze_decay_mode(data, true_labels, output_dir)
-    evq_auc = analyze_electron_vs_qcd(data, true_labels, output_dir)
-    regression_results = analyze_regression_task(data, output_dir)
+    regression_results = analyze_regression_task(data, true_labels, output_dir)
 
-    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results)
+    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, regression_results)
 
     plot_training_loss(training_json_path, output_dir)
 
