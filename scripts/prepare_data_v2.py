@@ -115,7 +115,7 @@ PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
 TAUTRACK_CLASSIFICATION_BRANCHES = [
     ("trk_truthType", "trk_truthType", False), # Could be trk_originClass (need to double-check) # 0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT
-]
+] # I will redefine the labels we feed into OMNI via the following # 0,8=Undefined; 1 = TTT; 2 = CT, 3,4 = IT (balled as 3), 5,6,7 = FT (balled as 4) 
 
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
@@ -269,7 +269,8 @@ def _process_chunk(events, label, n_events_in_chunk):
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
     ### TO-DO ONGOING EDITS HERE
-    chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
+    #chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
+    chunk_tau_track_targets =  _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS).astype(np.int32) if label == 1 else None
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
             chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets, chunk_tau_track_targets)
@@ -296,11 +297,11 @@ def process_file(filepath, label, chunk_size="250 MB"):
             n_entries = f["CollectionTree"].num_entries
     except Exception as e:
         print(f"Error opening {filepath}: {e}")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
     if n_entries == 0:
         print(f"File {filepath} is empty, skipping...")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
     branches = get_all_branches(label=label)
     chunk_results = []
@@ -318,7 +319,7 @@ def process_file(filepath, label, chunk_size="250 MB"):
 
     if len(chunk_results) == 0:
         print(f"  No jets in {filepath}")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
@@ -377,9 +378,9 @@ def _process_file_to_staging(args):
             hf.create_dataset(
                 "tau_track_targets",
                 shape=(n_jets, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                dtype=np.float32, # Can be int, no?
+                dtype=np.int32,
                 compression="gzip",
-                fillvalue=0.0,
+                fillvalue=0,
             )
     return staging_path, n_jets
 
@@ -489,7 +490,7 @@ def main():
                     "tau_track_targets",
                     shape=(0, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
                     maxshape=(None, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                    dtype=np.float32, # Can be int, no?
+                    dtype=np.int32,
                     compression="gzip",
                 )
             else:
@@ -516,9 +517,9 @@ def main():
                     hf.create_dataset(
                         "tau_track_targets",
                         shape=(len(data), MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                        dtype=np.float32, # Can be int, no?
+                        dtype=np.int32,
                         compression="gzip",
-                        fillvalue=0.0,
+                        fillvalue=0,
                     )
 
         print("Done.")
@@ -536,17 +537,17 @@ def main():
     ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
 
 
-    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))
-    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))
-    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))
-    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))
-    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))
+    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))[:2]
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))[:2]
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))[:2]
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))[:2]
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))[:2]
 
     # Gammatautau files (label 1)
-    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))
+    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))[:2]
     
     # Gammaee files (label 2)
-    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))
+    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))[:2]
     
     files_and_labels = []
 
@@ -739,7 +740,7 @@ def main():
                     hf.create_dataset("tau_targets", shape=(0,) + tau_shp, maxshape=(None,) + tau_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("charged_pion_targets", shape=(0,) + cpt_shp, maxshape=(None,) + cpt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("neutral_pion_targets", shape=(0,) + npt_shp, maxshape=(None,) + npt_shp, dtype=np.float32, compression="gzip")
-                    hf.create_dataset("tau_track_targets", shape=(0,) + ttt_shp, maxshape=(None,) + ttt_shp, dtype=np.float32, compression="gzip")
+                    hf.create_dataset("tau_track_targets", shape=(0,) + ttt_shp, maxshape=(None,) + ttt_shp, dtype=np.int32, compression="gzip")
 
     # Cleanup staging
     shutil.rmtree(staging_dir, ignore_errors=True)
