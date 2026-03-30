@@ -6,10 +6,8 @@ Converts ROOT files to HDF5 format with:
 - pid: Jet type label (0=QCD, 1=tau, 2=electron)
 - decay_mode: Tau decay mode (0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, -1=N/A or Error)
 - tau_targets: Tau regression targets [N, NUM_TAU_REGRESSION_TARGETS] (truth_pt, truth_eta, truth_phi)
-- pion_targets: Pion regression targets [N, MAX_PION_REGRESSION_TARGETS, NUM_PION_REGRESSION_TARGETS//2]
-               Padded to MAX_PION_REGRESSION_TARGETS pions, 0 = not present.
-               Charged pions stored first (up to 3), neutral pions after (up to 3).
-               Features per pion: [pt, eta, phi]
+- charged_pion_targets: Charged pion sum [N, 3] — (pt, eta, phi) of the 4-vector sum of all charged pions per event
+- neutral_pion_targets: Neutral pion sum [N, 3] — (pt, eta, phi) of the 4-vector sum of all neutral pions per event
 - tau
 
 Both clusters and tracks are treated as point clouds with first features being:
@@ -26,12 +24,15 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 import uproot
 import numpy as np
 import awkward as ak
+import vector
 import h5py
 import argparse
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 import shutil
+
+vector.register_awkward()
 
 
 # Configuration
@@ -136,8 +137,8 @@ def get_all_branches(label=None, use_cells=True):
 
     if label == 1:
         if use_cells:
-            branches += [b for _, b, _ in CELL_BRANCHES] # Only attempt to read cell branches for tau events (label 1)
-        branches += [b for _, b, _ in TAUTRACK_CLASSIFICATION_BRANCHES] # Only needs to read tau track classification branches for tau events (label 1)
+            branches += [b for _, b, _ in CELL_BRANCHES] 
+        branches += [b for _, b, _ in TAUTRACK_CLASSIFICATION_BRANCHES]
 
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
@@ -147,9 +148,11 @@ def get_all_branches(label=None, use_cells=True):
     return list(set(branches))
 
 
-def _list_root_files(dir_path):
+def _list_root_files(dir_path, num_files=None):
     """List only ROOT files to avoid sidecar files such as .asetup.save."""
-    return sorted([f for f in os.listdir(dir_path) if f.endswith(".root")])
+    if num_files is not None:
+        return [f for f in os.listdir(dir_path) if f.endswith(".root")][:num_files]
+    return [f for f in os.listdir(dir_path) if f.endswith(".root")]
 
 
 def _pad_and_convert(arr, max_items):
@@ -185,6 +188,42 @@ def _vectorized_scalar_targets(events, feature_specs):
             arr[nz] = np.log(np.maximum(arr[nz], 1e-8))
         out[:, feat_idx] = arr
     return out
+
+CHARGED_PION_MASS = 139.57018  # MeV
+NEUTRAL_PION_MASS = 134.97700  # MeV
+
+
+def _sum_pion_4vectors(events, pt_branch, eta_branch, phi_branch, mass_mev):
+    """Sum pion 4-vectors per event and return [N, 3] array of (pt_sum, eta_sum, phi_sum).
+
+    Builds a massive Momentum4D awkward array using the given pion mass, sums over
+    all pions per event with vector addition, then extracts pt/eta/phi of the result.
+    Events with no pions yield (-999, -999, -999).
+    """
+    pt_arr = events[pt_branch]
+    eta_arr = events[eta_branch]
+    phi_arr = events[phi_branch]
+    mass_arr = ak.full_like(pt_arr, mass_mev)
+
+    pions = ak.zip(
+        {"pt": pt_arr, "eta": eta_arr, "phi": phi_arr, "mass": mass_arr},
+        with_name="Momentum4D",
+        behavior=vector.backends.awkward.behavior,
+    )
+    no_pions = ak.to_numpy(ak.num(pions, axis=1) == 0)
+    sum_vec = ak.sum(pions, axis=1)
+
+    pt_sum  = ak.to_numpy(sum_vec.pt).astype(np.float32)
+    eta_sum = ak.to_numpy(sum_vec.eta).astype(np.float32)
+    phi_sum = ak.to_numpy(sum_vec.phi).astype(np.float32)
+
+    # default to -999 for later filtering
+    pt_sum[no_pions]  = -999.0
+    eta_sum[no_pions] = -999.0
+    phi_sum[no_pions] = -999.0
+
+    return np.stack([pt_sum, eta_sum, phi_sum], axis=1)
+
 
 def _vectorized_cells_per_cluster(label, events, cell_specs, max_clusters, max_cells_pc, cluster_sort=None, use_cells=True):
     """Build tau cell tensor (N, max_clusters, max_cells_pc, N_features); return None for non-tau labels to avoid large zero allocations.
@@ -262,11 +301,13 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     # Tau regression targets — one scalar set per jet
     chunk_tau_targets = _vectorized_scalar_targets(events, TAU_REGRESSION_TARGETS)
 
-    # Pion regression targets — ragged lists padded to MAX_PION_REGRESSION_TARGETS
-    chunk_charged_pion_targets = _vectorized_point_cloud(
-        events, CHARGED_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
-    chunk_neutral_pion_targets = _vectorized_point_cloud(
-        events, NEUTRAL_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
+    # Pion regression targets — sum all pions' 4-vectors per event, store (pt, eta, phi) of sum
+    chunk_charged_pion_targets = _sum_pion_4vectors(
+        events, "truth_chargedPion_pt", "truth_chargedPion_eta", "truth_chargedPion_phi",
+        mass_mev=CHARGED_PION_MASS)
+    chunk_neutral_pion_targets = _sum_pion_4vectors(
+        events, "truth_neutralPion_pt", "truth_neutralPion_eta", "truth_neutralPion_phi",
+        mass_mev=NEUTRAL_PION_MASS)
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
     ### TO-DO ONGOING EDITS HERE
@@ -287,8 +328,8 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
         pid: Jet labels [N_jets]
         decay_mode: Decay mode labels [N_jets]
         tau_targets: Tau regression targets [N_jets, NUM_TAU_REGRESSION_TARGETS]
-        charged_pion_targets: Charged pion targets [N_jets, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES]
-        neutral_pion_targets: Neutral pion targets [N_jets, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES]
+        charged_pion_targets: Charged pion sum [N_jets, 3] — (pt, eta, phi) of 4-vector sum per event
+        neutral_pion_targets: Neutral pion sum [N_jets, 3] — (pt, eta, phi) of 4-vector sum per event
     """
     print(f"Processing {filepath} with label {label} (chunk_size={chunk_size})")
 
@@ -402,24 +443,17 @@ def main():
                         help="Directory to save HDF5 files")
     parser.add_argument("--train_frac", type=float, default=0.8)
     parser.add_argument("--val_frac", type=float, default=0.1)
-    parser.add_argument(
-        "--chunk_size",
-        type=str,
-        default="500 MB",
+    parser.add_argument("--chunk_size", type=str, default="500 MB",
         help="ROOT read chunk size: int (entries) or str (e.g. '500 MB', '2 GB'). Lower = less memory, more I/O.",
     )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=9,
+    parser.add_argument("--workers", type=int, default=9,
         help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
     )
     parser.add_argument(
-        "--no_cells",
-        action="store_true",
-        default=True,
+        "--no_cells", action="store_true", default=True,
         help="Skip reading and saving cell features (cells_per_cluster). Reduces memory and disk usage.",
     )
+    parser.add_argument("--num-files", type=int, default=None)
     args = parser.parse_args()
     use_cells = not args.no_cells
 
@@ -484,15 +518,15 @@ def main():
                 )
                 hf.create_dataset(
                     "charged_pion_targets",
-                    shape=(0, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES),
-                    maxshape=(None, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES),
+                    shape=(0, 3),
+                    maxshape=(None, 3),
                     dtype=np.float32,
                     compression="gzip",
                 )
                 hf.create_dataset(
                     "neutral_pion_targets",
-                    shape=(0, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES),
-                    maxshape=(None, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES),
+                    shape=(0, 3),
+                    maxshape=(None, 3),
                     dtype=np.float32,
                     compression="gzip",
                 )
@@ -544,21 +578,23 @@ def main():
     jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_03_23_26_Prod1_EXT0"
     jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_03_23_26_Prod1_EXT0"
 
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_23_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_30_26_Prod1_EXT0"
     ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
 
-
-    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))
-    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))
-    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))
-    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))
-    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))
+    num_files = args.num_files
+    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
 
     # Gammatautau files (label 1)
-    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))
+    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name), 
+                                         num_files=num_files)
     
     # Gammaee files (label 2)
-    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))
+    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name), 
+                                     num_files=num_files)
     
     files_and_labels = []
 
@@ -816,14 +852,16 @@ def main():
     print(f"\n  tracks: (N, {tshape[1]}, {tshape[2]})")
     print(f"    - {MAX_TRACKS} tracks x {NUM_TRACK_FEATURES} features")
     print(f"    - First 4: dEta, dPhi, log(pt), theta")
-    print(f"\n  cells_per_cluster: (N, {cpc_shape[1]}, {cpc_shape[2]}, {cpc_shape[3]})")
-    print(f"    - {MAX_CLUSTERS} clusters x {MAX_CELLS_PER_CLUSTER} cells x {NUM_CELL_FEATURES} features")
+    if use_cells:
+        print(f"\n  cells_per_cluster: (N, {cpc_shape[1]}, {cpc_shape[2]}, {cpc_shape[3]})")
+        print(f"    - {MAX_CLUSTERS} clusters x {MAX_CELLS_PER_CLUSTER} cells x {NUM_CELL_FEATURES} features")
     print(f"\n  tau_targets: (N, {tau_shape[1]})")
     print(f"    - {NUM_TAU_REGRESSION_TARGETS} scalar targets per jet: truth_pt, truth_eta, truth_phi")
-    print(f"\n  charged_pion_targets: (N, {cpt_shape[1]}, {cpt_shape[2]})")
-    print(f"    - up to {MAX_PION_REGRESSION_TARGETS} charged pions x {NUM_PION_FEATURES} features (pt, eta, phi), 0-padded")
-    print(f"\n  neutral_pion_targets: (N, {npt_shape[1]}, {npt_shape[2]})")
-    print(f"    - up to {MAX_PION_REGRESSION_TARGETS} neutral pions x {NUM_PION_FEATURES} features (pt, eta, phi), 0-padded")
+    if use_cells:
+        print(f"\n  charged_pion_targets: (N, {cpt_shape[1]})")
+        print("    - (pt, eta, phi) of 4-vector sum of charged pions per event")
+    print(f"\n  neutral_pion_targets: (N, {npt_shape[1]})")
+    print("    - (pt, eta, phi) of 4-vector sum of neutral pions per event")
     print(f"\n  tau_track_targets: (N, {ttt_shape[1]}, {ttt_shape[2]})")
     print(f"    - up to {MAX_TRACKS} tracks x {NUM_TAU_TRACK_CLASSIFICATION_TARGETS} features (tau_track_class), 0-padded")
     print(f"\nCluster features ({NUM_CLUSTER_FEATURES}):")
@@ -832,9 +870,10 @@ def main():
     print(f"\nTrack features ({NUM_TRACK_FEATURES}):")
     for i, (name, _, _) in enumerate(TRACK_BRANCHES):
         print(f"    {i}: {name}")
-    print(f"\nCell features ({NUM_CELL_FEATURES}):")
-    for i, (name, _, _) in enumerate(CELL_BRANCHES):
-        print(f"    {i}: {name}")
+    if use_cells:
+        print(f"\nCell features ({NUM_CELL_FEATURES}):")
+        for i, (name, _, _) in enumerate(CELL_BRANCHES):
+            print(f"    {i}: {name}")
     print(f"\n" + "="*60)
     print("TRAINING COMMAND")
     print("="*60)
@@ -842,7 +881,7 @@ def main():
     print(f"    --num-feat {NUM_CLUSTER_FEATURES} --num-classes 3 \\")
     print(f"    --use-tracks --track-dim {NUM_TRACK_FEATURES} \\")
     print(f"    --use-cells --cell-dim {NUM_CELL_FEATURES} \\")
-    print(f"    --aux-tasks-str 'decay_mode:7,electron_vs_qcd:2'")
+    print(f"    --aux-tasks-str 'decay_mode:5'")
 
 
 if __name__ == "__main__":

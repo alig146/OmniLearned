@@ -534,50 +534,25 @@ def _plot_tau_targets(tau_targets, output_dir):
 
 def _plot_pion_targets(pion_targets, pion_kind, color, output_dir):
     """
-    One file per pion feature plus one multiplicity plot and one pt-by-slot plot,
-    all using the same (8, 6) style as the cluster/track feature plots.
+    One file per pion feature (pt, eta, phi) of the summed pion 4-vector.
+    pion_targets has shape [N, 3] — (pt_sum, eta_sum, phi_sum) per event,
+    as produced by prepare_data_v2.py's _sum_pion_4vectors.
     """
-    kind_lc      = pion_kind.lower()
-    max_pions    = pion_targets.shape[1]
-    pion_present = np.any(pion_targets != 0, axis=-1)   # (N_tau, max_pions)
-    n_pions_per_jet = pion_present.sum(axis=1)
+    kind_lc = pion_kind.lower()
+    # Events with no pions are sentinel-filled with -999; exclude them
+    valid_mask = pion_targets[:, 0] != -999.0
 
-    # -- Multiplicity --
-    fig, ax = _make_fig(figsize=(6, 6))
-    unique, counts = np.unique(n_pions_per_jet, return_counts=True)
-    ax.bar(unique, counts, color=color, alpha=0.5)
-    _apply_axis_style(ax, "Pions per tau jet", "Jets", f"{pion_kind} pion multiplicity")
-    ax.set_xticks(range(max_pions + 1))
-    _save_and_close(fig, os.path.join(output_dir, f"truth_{kind_lc}_pion_multiplicity.png"))
-
-    # -- Per-feature histograms (valid slots only) --
     for feat_idx, feat_name in enumerate(PION_FEATURE_NAMES):
-        feat_vals = pion_targets[:, :, feat_idx][pion_present]
-        fig, ax   = _make_fig(figsize=(6, 6))
-        _clip_and_hist(ax, feat_vals, label=pion_kind, color=color)
-        _apply_axis_style(ax, f"{kind_lc} pion {feat_name}", "Density",
-                          f"{pion_kind} pion {feat_name}")
+        vals = pion_targets[valid_mask, feat_idx]
+        fig, ax = _make_fig(figsize=(6, 6))
+        _clip_and_hist(ax, vals, label=f"{pion_kind} sum", color=color)
+        _apply_axis_style(ax, f"{kind_lc} pion sum {feat_name}", "Density",
+                          f"{pion_kind} pion sum {feat_name}")
         ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
         safe = _safe_feature_name(feat_name)
         _save_and_close(fig, os.path.join(output_dir, f"truth_{kind_lc}_pion_{safe}.png"))
 
-    # -- pT by slot (all slots overlaid on one figure) --
-    pt_idx      = PION_FEATURE_NAMES.index("pt") if "pt" in PION_FEATURE_NAMES else 0
-    slot_colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"]
-    fig, ax     = _make_fig(figsize=(6, 6))
-    for slot in range(max_pions):
-        slot_present = pion_present[:, slot]
-        slot_pt      = pion_targets[slot_present, slot, pt_idx]
-        if len(slot_pt) > 0:
-            _clip_and_hist(ax, slot_pt,
-                           label=f"slot {slot}  (n={len(slot_pt)})",
-                           color=slot_colors[slot % len(slot_colors)])
-    _apply_axis_style(ax, "Truth pt", "Density", f"{pion_kind} pion pt by slot")
-    ax.legend(fontsize=PLOT_STYLE["fontsize_legend"])
-    _save_and_close(fig, os.path.join(output_dir, f"truth_{kind_lc}_pion_pt_by_slot.png"))
-
-    n_saved = 1 + len(PION_FEATURE_NAMES) + 1
-    print(f"  Saved {n_saved} {kind_lc} pion target plots")
+    print(f"  Saved {len(PION_FEATURE_NAMES)} {kind_lc} pion target plots")
 
 
 def plot_truth_targets(data, output_dir):
