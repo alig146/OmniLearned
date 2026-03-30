@@ -32,7 +32,7 @@ def eval_model(
     save_tag="pretrain",
     rank=0,
 ):
-    prediction, cond, labels, aux_preds, decay_modes = test_step(model, test_loader, mode, device)
+    prediction, cond, labels, aux_preds, decay_modes, tau_track_targets = test_step(model, test_loader, mode, device)
 
     if mode in ["classifier", "regression", "segmentation"]:
         if use_event_loss:
@@ -63,6 +63,8 @@ def eval_model(
             # Add decay_mode true labels if available
             if decay_modes is not None:
                 save_dict["decay_mode"] = decay_modes.cpu().numpy()
+            if tau_track_targets is not None:
+                save_dict["tau_track_targets"] = tau_track_targets.cpu().numpy()
 
             np.savez(
                 os.path.join(outdir, f"outputs_{save_tag}_{dataset}_{rank}.npz"),
@@ -91,6 +93,7 @@ def test_step(
     conds = []
     aux_preds_all = {}  # Collect auxiliary predictions
     decay_modes = []    # Collect true decay mode labels
+    tau_track_targets = []  # Collect true tau track classification labels
 
     for ib, batch in enumerate(
         tqdm(dataloader, desc="Iterating", total=len(dataloader))
@@ -135,6 +138,10 @@ def test_step(
         # Collect true decay mode labels if available
         if batch.get("decay_mode") is not None:
             decay_modes.append(batch["decay_mode"].to(device))
+
+        # Collect tau track classification labels if available
+        if batch.get("tau_track_targets") is not None:
+            tau_track_targets.append(batch["tau_track_targets"].to(device))
         
         if mode == "generator":
             if batch["pid"] is not None:
@@ -156,13 +163,17 @@ def test_step(
     
     # Concatenate decay modes if collected
     decay_modes_concat = torch.cat(decay_modes).to(device) if decay_modes else None
-    
+
+    # Concatenate tau track classification labels if collected
+    tau_track_targets_concat = torch.cat(tau_track_targets).to(device) if tau_track_targets else None
+
     return (
         preds,
         torch.cat(conds).to(device) if conds[0] is not None else None,
         torch.cat(labels).to(device),
         aux_preds_concat,
         decay_modes_concat,
+        tau_track_targets_concat,
     )
 
 

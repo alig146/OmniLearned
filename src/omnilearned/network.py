@@ -102,6 +102,16 @@ class PET2(nn.Module):
         self.generator = None
 
         self.aux_tasks = aux_tasks or []
+        # Tasks in this set are predicted per track token (B, T, C).
+        self.track_task_names = {"tautrack_class"}
+        self.track_aux_heads = nn.ModuleDict()
+        event_aux_tasks = [
+            task for task in self.aux_tasks if task["name"] not in self.track_task_names
+        ]
+        track_aux_tasks = [
+            task for task in self.aux_tasks if task["name"] in self.track_task_names
+        ]
+
         use_classifier = self.mode in ["classifier", "ftag", "regression", "pretrain"]
         use_generator = self.mode in ["generator", "segmentation", "ftag", "pretrain"]
         if use_classifier:
@@ -116,8 +126,13 @@ class PET2(nn.Module):
                 attn_drop=attn_drop,
                 num_tokens=num_tokens,
                 num_classes=num_classes,
-                aux_tasks=aux_tasks,
+                aux_tasks=event_aux_tasks,
             )
+
+            for task in track_aux_tasks:
+                self.track_aux_heads[task["name"]] = nn.Linear(
+                    base_dim, task["num_classes"]
+                )
 
         if use_generator:
             self.generator = PET_generator(
@@ -193,6 +208,20 @@ class PET2(nn.Module):
         if self.aux_tasks and isinstance(y_pred, dict):
             aux_preds = {k: v for k, v in y_pred.items() if k != "primary"}
             y_pred = y_pred["primary"]
+
+        # Add per-track auxiliary predictions from track token embeddings.
+        if (
+            x_body is not None
+            and self.use_tracks
+            and tracks is not None
+            and len(self.track_aux_heads) > 0
+        ):
+            n_tracks = tracks.shape[1]
+            track_tokens = x_body[:, -n_tracks:, :]
+            if aux_preds is None:
+                aux_preds = {}
+            for task_name, head in self.track_aux_heads.items():
+                aux_preds[task_name] = head(track_tokens)
 
         return {
             "y_pred": y_pred,

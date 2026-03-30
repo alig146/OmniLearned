@@ -311,6 +311,11 @@ def get_loss(
             aux_pred = aux_pred[valid]
             task_labels = task_labels[valid]
 
+            # Flatten token-level predictions (B, T, C) to (N, C) for CE loss.
+            if aux_pred.dim() > 2:
+                aux_pred = aux_pred.reshape(-1, aux_pred.shape[-1])
+                task_labels = task_labels.reshape(-1)
+
             loss_aux = torch.mean(class_cost(aux_pred, task_labels))
             logs[f"loss_{task_name}"] = logs.get(f"loss_{task_name}", 0.0) + loss_aux.detach()
             loss = loss + task_weight * loss_aux

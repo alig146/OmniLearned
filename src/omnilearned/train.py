@@ -42,6 +42,24 @@ def get_logs(device):
     return logs
 
 
+def map_tau_track_targets(raw_targets):
+    """Map raw origin labels to 4 classes: TTT, CT, IT, FT; invalid -> -1.
+
+    Raw labels are expected as:
+    0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT.
+    """
+    targets = raw_targets.long()
+    if targets.dim() == 3 and targets.shape[-1] == 1:
+        targets = targets[..., 0]
+
+    mapped = torch.full_like(targets, -1)
+    mapped[targets == 1] = 0
+    mapped[targets == 2] = 1
+    mapped[(targets == 3) | (targets == 4)] = 2
+    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3
+    return mapped
+
+
 def train_step(
     model,
     dataloader,
@@ -128,6 +146,13 @@ def train_step(
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+
+        # Tau Track Classification Labels (1 = TTT, 2 = CT, 3,4 = IT, 5,6,7 = FT, 0,8 = Undefined) # Simplify this for next prepare_data_v2.py iteration (for now just consider 1,2,3,4 as valid and mask the rest)
+        if batch.get("tau_track_targets") is not None:
+            raw_track_targets = batch["tau_track_targets"].to(device)
+            aux_labels["tautrack_class"] = map_tau_track_targets(raw_track_targets)
+            aux_masks["tautrack_class"] = ( (y[:, None] == 1) & (aux_labels["tautrack_class"] >= 0) )
+             
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -251,6 +276,12 @@ def val_step(
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+
+        # Tau Track Classification Labels (1 = TTT, 2 = CT, 3,4 = IT, 5,6,7 = FT, 0,8 = Undefined) # Simplify this for next prepare_data_v2.py iteration (for now just consider 1,2,3,4 as valid and mask the rest)
+        if batch.get("tau_track_targets") is not None:
+            raw_track_targets = batch["tau_track_targets"].to(device)
+            aux_labels["tautrack_class"] = map_tau_track_targets(raw_track_targets)
+            aux_masks["tautrack_class"] = ( (y[:, None] == 1) & (aux_labels["tautrack_class"] >= 0) )
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
