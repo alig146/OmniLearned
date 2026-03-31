@@ -243,6 +243,110 @@ def plot_score_distributions(predictions, true_labels, class_names, output_dir):
 
 
 # ---------------------------------------------------------------------------
+# Tau Track Classification
+# ---------------------------------------------------------------------------
+
+def plot_tau_track_class_score_distributions(tautrack_pred_valid, tautrack_true_valid, tautrack_classes, output_dir):
+    """Save one score-distribution plot per track class."""
+    print("Plotting tau track classification score distributions...")
+    colors_ttt = ["#1987d4", '#2ca02c', '#d62728', '#9467bd']
+    for i, (name, color) in enumerate(zip(tautrack_classes, colors_ttt)):
+        fig, ax = setup_plot(
+            xlabel=f'{name} Score',
+            ylabel='Density',
+            title='',
+            xlim=[0, 1],
+        )
+        for j, (true_name, true_color) in enumerate(zip(tautrack_classes, colors_ttt)):
+            mask = tautrack_true_valid == j
+            if mask.any():
+                ax.hist(tautrack_pred_valid[mask, i], bins=50, alpha=0.5,
+                        label=f'True {true_name}', color=true_color, density=True)
+        ax.legend(fontsize=7)
+        save_plot(fig, f'{output_dir}/tautrack_score_dist_{name}.png')
+
+
+def map_tau_track_targets(raw_targets):
+    """Map raw origin labels to 4 classes: TTT, CT, IT, FT; invalid -> -1.
+
+    Raw labels are expected as:
+    0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT.
+    """
+    targets = np.asarray(raw_targets, dtype=np.int64)
+    if targets.ndim == 3 and targets.shape[-1] == 1:
+        targets = targets[..., 0]
+    mapped = np.full_like(targets, -1, dtype=np.int64)
+    mapped[targets == 1] = 0  # TTT
+    mapped[targets == 2] = 1  # CT
+    mapped[(targets == 3) | (targets == 4)] = 2  # IT
+    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3  # FT
+    return mapped
+
+def analyze_tautrack_classification(data, true_labels, output_dir):
+    """Analyze tau track classification auxiliary task."""
+    if 'aux_tautrack_class_pred' not in data.keys():
+        print("\nNo auxiliary tautrack_class predictions found.")
+        return None
+
+    print("\n" + "=" * 60)
+    print("WILLY WONKA GOLDEN TICKET: Tau Track Classification (4-class)")
+    print("=" * 60)
+
+    tautrack_pred = data['aux_tautrack_class_pred']
+    tautrack_true = data['tau_track_targets']
+    print(f"\nTautrack_pred shape: {tautrack_pred.shape}")
+    print(f"Tautrack_true shape: {tautrack_true.shape}")
+
+
+    #print("\n Tau Track Class Targets look like this: ", tautrack_true)
+    tau_mask = true_labels == 1
+    print(f"\nTotal tau jets: {tau_mask.sum()}")
+    print(f" Total TT Tracks: {(tautrack_true == 1).sum()}")
+    print(f" Total CT Tracks: {(tautrack_true == 2).sum()}")
+    print(f" Total IT Tracks: {(tautrack_true == 3).sum()+(tautrack_true == 4).sum()}")
+    print(f" Total FT Tracks: {(tautrack_true == 5).sum() + (tautrack_true == 6).sum() + (tautrack_true == 7).sum()}")
+    print(f" Total Undefined Tracks: {(tautrack_true == 0).sum() + (tautrack_true == 8).sum()}")
+
+    tautrack_pred_valid_tau = tautrack_pred[tau_mask]
+    tautrack_true_valid_tau = tautrack_true[tau_mask]
+    tautrack_pred_labels = np.argmax(tautrack_pred_valid_tau, axis=-1)
+
+    # Re-map raw 8/9-value labels into 4 classes used by the auxiliary head.
+    tautrack_true_valid_tau = map_tau_track_targets(tautrack_true_valid_tau)
+
+    print(f"\nFiltering for valid tau jets only...")
+    print(f"\nTautrack_pred_valid shape: {tautrack_pred_valid_tau.shape}")
+    print(f"Tautrack_true_valid shape: {tautrack_true_valid_tau.shape}")
+    print(f"\n Total number of undefined tau tracks: {(tautrack_true_valid_tau == -1).sum()}")
+
+    valid_track_mask = tautrack_true_valid_tau >= 0
+    tautrack_true_valid_tau_valid_track = tautrack_true_valid_tau[valid_track_mask]
+    tautrack_pred_labels_valid_track = tautrack_pred_labels[valid_track_mask]
+    tautrack_pred_scores_valid_track = tautrack_pred_valid_tau[valid_track_mask] # Keep per-class scores for plotting: (N_valid_tracks, 4)
+
+    print(f"\nFiltering for valid tau jets and applying a mask on the invalid tau-tracks...")
+    print(f"\nTautrack_true_valid shape: {tautrack_true_valid_tau_valid_track.shape}")
+    print(f"Tautrack_pred_labels_valid shape: {tautrack_pred_labels_valid_track.shape}")
+    print(f"Tautrack_pred_scores_valid shape: {tautrack_pred_scores_valid_track.shape}")
+
+    tautrack_classes = ['TT', 'CT', 'IT', 'FT']
+    n_tautrack_classes = 4
+    print("\n Tau Track Class distribution:")
+    for i, name in enumerate(tautrack_classes):
+        print(f"  {name}: {(tautrack_true_valid_tau_valid_track == i).sum()}")
+    track_accuracy = accuracy_score(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_track)
+    print(f"\nTau Track Classification (Inclusive) Accuracy: {track_accuracy:.4f} ({track_accuracy*100:.2f}%)")
+
+
+    print("\nTau Track Classification Report:")
+    present_labels = sorted(set(tautrack_true_valid_tau_valid_track) | set(tautrack_pred_labels_valid_track))
+    present_names = [tautrack_classes[i] for i in present_labels if i < len(tautrack_classes)]
+    print(classification_report(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_track,
+                                labels=present_labels, target_names=present_names, digits=4))
+
+    plot_tau_track_class_score_distributions(tautrack_pred_scores_valid_track, tautrack_true_valid_tau_valid_track, tautrack_classes, output_dir)
+
+# ---------------------------------------------------------------------------
 # Decay mode
 # ---------------------------------------------------------------------------
 
@@ -632,6 +736,7 @@ def main(results_path="results/outputs__tau_0.npz", output_dir="results",
     dm_accuracy = analyze_decay_mode(data, true_labels, output_dir)
     evq_auc = analyze_electron_vs_qcd(data, true_labels, output_dir)
     regression_results = analyze_regression_task(data, output_dir)
+    tautrack_accuracy = analyze_tautrack_classification(data, true_labels, output_dir)
 
     print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results)
 
