@@ -216,12 +216,12 @@ class PET2(nn.Module):
             and tracks is not None
             and len(self.track_aux_heads) > 0
         ):
-            n_tracks = tracks.shape[1]
-            track_tokens = x_body[:, -n_tracks:, :]
+            n_tracks = tracks.shape[1]  # scalar T
+            track_tokens = x_body[:, -n_tracks:, :]  # (B, T, D)
             if aux_preds is None:
                 aux_preds = {}
             for task_name, head in self.track_aux_heads.items():
-                aux_preds[task_name] = head(track_tokens)
+                aux_preds[task_name] = head(track_tokens)  # (B, T, C_task)
 
         return {
             "y_pred": y_pred,

@@ -292,31 +292,31 @@ def get_loss(
             if task_name not in aux_labels or aux_labels[task_name] is None:
                 continue
 
-            task_labels = aux_labels[task_name]
+            task_labels = aux_labels[task_name]  # (B,) or (B, T)
             task_weight = aux_weights.get(task_name, 1.0) # TODO: effect of changing this?!
-            task_mask = aux_masks.get(task_name, None)
+            task_mask = aux_masks.get(task_name, None)  # (B,) or (B, T)
 
             # Apply mask if provided (e.g., decay_mode only for tau samples)
             if task_mask is not None:
                 if not task_mask.any():
                     continue
-                aux_pred = aux_pred[task_mask]
-                task_labels = task_labels[task_mask]
+                aux_pred = aux_pred[task_mask]  # (N_valid, C_task) or (N_valid, T, C_task)
+                task_labels = task_labels[task_mask]  # (N_valid,) or (N_valid, T)
 
             # Filter out invalid labels (e.g., -1 or Error=7) and out-of-range labels
-            num_classes_task = aux_pred.shape[-1]
-            valid = (task_labels >= 0) & (task_labels < num_classes_task)
+            num_classes_task = aux_pred.shape[-1]  # C_task
+            valid = (task_labels >= 0) & (task_labels < num_classes_task)  # same shape as task_labels
             if not valid.any():
                 continue
-            aux_pred = aux_pred[valid]
-            task_labels = task_labels[valid]
+            aux_pred = aux_pred[valid]  # (N_valid2, C_task)
+            task_labels = task_labels[valid]  # (N_valid2,)
 
             # Flatten token-level predictions (B, T, C) to (N, C) for CE loss.
             if aux_pred.dim() > 2:
-                aux_pred = aux_pred.reshape(-1, aux_pred.shape[-1])
-                task_labels = task_labels.reshape(-1)
+                aux_pred = aux_pred.reshape(-1, aux_pred.shape[-1])  # (N_flat, C_task)
+                task_labels = task_labels.reshape(-1)  # (N_flat,)
 
-            loss_aux = torch.mean(class_cost(aux_pred, task_labels))
+            loss_aux = torch.mean(class_cost(aux_pred, task_labels))  # scalar, mean over valid samples
             logs[f"loss_{task_name}"] = logs.get(f"loss_{task_name}", 0.0) + loss_aux.detach()
             loss = loss + task_weight * loss_aux
 

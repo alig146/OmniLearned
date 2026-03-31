@@ -48,16 +48,16 @@ def map_tau_track_targets(raw_targets):
     Raw labels are expected as:
     0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT.
     """
-    targets = raw_targets.long()
+    targets = raw_targets.long()  # (B, T) or (B, T, 1)
     if targets.dim() == 3 and targets.shape[-1] == 1:
-        targets = targets[..., 0]
+        targets = targets[..., 0]  # (B, T)
 
-    mapped = torch.full_like(targets, -1)
-    mapped[targets == 1] = 0
-    mapped[targets == 2] = 1
-    mapped[(targets == 3) | (targets == 4)] = 2
-    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3
-    return mapped
+    mapped = torch.full_like(targets, -1)  # (B, T), default invalid
+    mapped[targets == 1] = 0  # TTT
+    mapped[targets == 2] = 1  # CT
+    mapped[(targets == 3) | (targets == 4)] = 2  # IT
+    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3  # FT
+    return mapped  # (B, T)
 
 
 def train_step(
