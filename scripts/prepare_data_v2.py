@@ -537,17 +537,17 @@ def main():
     ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
 
 
-    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))[:2]
-    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))[:2]
-    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))[:2]
-    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))[:2]
-    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))[:2]
+    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name))
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name))
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name))
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name))
 
     # Gammatautau files (label 1)
-    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))[:2]
+    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name))
     
     # Gammaee files (label 2)
-    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))[:2]
+    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name))
     
     files_and_labels = []
 

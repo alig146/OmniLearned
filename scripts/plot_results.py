@@ -249,15 +249,15 @@ def plot_score_distributions(predictions, true_labels, class_names, output_dir):
 def plot_tau_track_class_score_distributions(tautrack_pred_valid, tautrack_true_valid, tautrack_classes, output_dir):
     """Save one score-distribution plot per track class."""
     print("Plotting tau track classification score distributions...")
-    colors_ttt = ["#1987d4", '#2ca02c', '#d62728', '#9467bd']
-    for i, (name, color) in enumerate(zip(tautrack_classes, colors_ttt)):
+    colors_ttc = ["#1987d4", '#2ca02c', '#d62728', '#9467bd']
+    for i, (name, color) in enumerate(zip(tautrack_classes, colors_ttc)):
         fig, ax = setup_plot(
             xlabel=f'{name} Score',
             ylabel='Density',
             title='',
             xlim=[0, 1],
         )
-        for j, (true_name, true_color) in enumerate(zip(tautrack_classes, colors_ttt)):
+        for j, (true_name, true_color) in enumerate(zip(tautrack_classes, colors_ttc)):
             mask = tautrack_true_valid == j
             if mask.any():
                 ax.hist(tautrack_pred_valid[mask, i], bins=50, alpha=0.5,
@@ -321,30 +321,67 @@ def analyze_tautrack_classification(data, true_labels, output_dir):
 
     valid_track_mask = tautrack_true_valid_tau >= 0
     tautrack_true_valid_tau_valid_track = tautrack_true_valid_tau[valid_track_mask]
-    tautrack_pred_labels_valid_track = tautrack_pred_labels[valid_track_mask]
-    tautrack_pred_scores_valid_track = tautrack_pred_valid_tau[valid_track_mask] # Keep per-class scores for plotting: (N_valid_tracks, 4)
+    tautrack_pred_labels_valid_tau_valid_track = tautrack_pred_labels[valid_track_mask]
+    tautrack_pred_scores_valid_tau_valid_track = tautrack_pred_valid_tau[valid_track_mask] # Keep per-class scores for plotting: (N_valid_tracks, 4)
 
     print(f"\nFiltering for valid tau jets and applying a mask on the invalid tau-tracks...")
     print(f"\nTautrack_true_valid shape: {tautrack_true_valid_tau_valid_track.shape}")
-    print(f"Tautrack_pred_labels_valid shape: {tautrack_pred_labels_valid_track.shape}")
-    print(f"Tautrack_pred_scores_valid shape: {tautrack_pred_scores_valid_track.shape}")
+    print(f"Tautrack_pred_labels_valid shape: {tautrack_pred_labels_valid_tau_valid_track.shape}")
+    print(f"Tautrack_pred_scores_valid shape: {tautrack_pred_scores_valid_tau_valid_track.shape}")
 
     tautrack_classes = ['TT', 'CT', 'IT', 'FT']
     n_tautrack_classes = 4
     print("\n Tau Track Class distribution:")
     for i, name in enumerate(tautrack_classes):
         print(f"  {name}: {(tautrack_true_valid_tau_valid_track == i).sum()}")
-    track_accuracy = accuracy_score(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_track)
+    track_accuracy = accuracy_score(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_tau_valid_track)
     print(f"\nTau Track Classification (Inclusive) Accuracy: {track_accuracy:.4f} ({track_accuracy*100:.2f}%)")
 
 
     print("\nTau Track Classification Report:")
-    present_labels = sorted(set(tautrack_true_valid_tau_valid_track) | set(tautrack_pred_labels_valid_track))
+    present_labels = sorted(set(tautrack_true_valid_tau_valid_track) | set(tautrack_pred_labels_valid_tau_valid_track))
     present_names = [tautrack_classes[i] for i in present_labels if i < len(tautrack_classes)]
-    print(classification_report(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_track,
+    print(classification_report(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_tau_valid_track,
                                 labels=present_labels, target_names=present_names, digits=4))
 
-    plot_tau_track_class_score_distributions(tautrack_pred_scores_valid_track, tautrack_true_valid_tau_valid_track, tautrack_classes, output_dir)
+    plot_tau_track_class_score_distributions(tautrack_pred_scores_valid_tau_valid_track, tautrack_true_valid_tau_valid_track, tautrack_classes, output_dir)
+
+    # Confusion Matrices
+    print("\nPlotting tau track classification confusion matrices...")
+    cm_ttc = confusion_matrix(tautrack_true_valid_tau_valid_track, tautrack_pred_labels_valid_tau_valid_track, labels=list(range(n_tautrack_classes)))
+    fig, ax = plt.subplots(figsize=(7,6))
+    ConfusionMatrixDisplay(cm_ttc, display_labels=tautrack_classes).plot(ax=ax, cmap='Oranges', values_format='d')
+    ax.grid(False)
+    ax.set_title('Counts')
+    save_plot(fig, f'{output_dir}/tautrack_class_confusion_counts.png')
+
+    row_sums = cm_ttc.sum(axis=1)[:, np.newaxis]
+    cm_ttc_norm = np.divide(cm_ttc.astype('float'), row_sums, where=row_sums != 0, out=np.zeros_like(cm_ttc, dtype=float))
+    fig, ax = plt.subplots(figsize=(7,6))
+    ConfusionMatrixDisplay(cm_ttc_norm, display_labels=tautrack_classes).plot(ax=ax, cmap='Oranges', values_format='.3f')
+    ax.grid(False)
+    ax.set_title('Normalized by Truth')
+    save_plot(fig, f'{output_dir}/tautrack_class_confusion_normalized.png')
+
+    # Roc Curves
+    print("\nPlotting tau track classification ROC curves...")
+    colors_ttc = ["#1987d4", '#2ca02c', '#d62728', '#9467bd']
+    print("\nTau Track Classification AUC (one-vs-rest):")
+    for i, (name, color) in enumerate(zip(tautrack_classes, colors_ttc)):
+        y_true_binary = (tautrack_true_valid_tau_valid_track == i).astype(int)
+        if y_true_binary.sum() == 0 or y_true_binary.sum() == len(y_true_binary):
+            print(f"  {name}: N/A (no samples)")
+            continue
+        fpr_ttc, tpr_ttc, _ = roc_curve(y_true_binary, tautrack_pred_scores_valid_tau_valid_track[:, i])
+        auc_ttc = auc(fpr_ttc, tpr_ttc)
+
+        fig, ax = setup_plot(xlabel='False Positive Rate', ylabel='True Positive Rate', title=f'{name} vs Rest', xlim=[0.0, 1.0], ylim=[0.0, 1.0])
+        ax.plot(fpr_ttc, tpr_ttc, color=color, lw=2, label=f'AUC = {auc_ttc:.4f}')
+        ax.plot([0, 1], [0, 1], 'k--', lw=1)
+        ax.legend(loc='lower right')
+        save_plot(fig, f'{output_dir}/tautrack_class_roc_{name}.png')
+        print(f"  {name}: {auc_ttc:.4f}")
+    return(track_accuracy)
 
 # ---------------------------------------------------------------------------
 # Decay mode
@@ -677,7 +714,7 @@ def plot_training_loss(training_json_path, output_dir):
 # Summary
 # ---------------------------------------------------------------------------
 
-def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regression_results=None):
+def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regression_results=None, tautrack_accuracy=None):
     """Print final summary of all tasks."""
     print("\n" + "=" * 60)
     print("MULTI-TASK LEARNING SUMMARY")
@@ -701,6 +738,9 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, evq_auc=None, regr
             print(f"  MAE:  {metrics['mae']:.6f}")
             print(f"  RMSE: {metrics['rmse']:.6f}")
             print(f"  R²:   {metrics['r_squared']:.4f}")
+    if tautrack_accuracy is not None:
+        print("\n{WILLY WONKA GOLDEN TICKET} Tau Track Classification (4-class)")
+        print(f"  Accuracy: {tautrack_accuracy:.4f}")
 
     print("\n" + "=" * 60)
 
@@ -738,7 +778,7 @@ def main(results_path="results/outputs__tau_0.npz", output_dir="results",
     regression_results = analyze_regression_task(data, output_dir)
     tautrack_accuracy = analyze_tautrack_classification(data, true_labels, output_dir)
 
-    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results)
+    print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy, evq_auc, regression_results, tautrack_accuracy)
 
     plot_training_loss(training_json_path, output_dir)
 
