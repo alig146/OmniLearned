@@ -131,13 +131,36 @@ def train_step(
         
         # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
         if batch.get("tau_targets") is not None:
+            tau_mask = (y == 1)
             tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
             aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
-            aux_masks["tes"] = (y == 1)  # Only tau samples
+            aux_masks["tes"] = tau_mask
             aux_labels["tau_eta"] = tau_targets[:, 1]
-            aux_masks["tau_eta"] = (y == 1)
+            aux_masks["tau_eta"] = tau_mask
             aux_labels["tau_phi"] = tau_targets[:, 2]
-            aux_masks["tau_phi"] = (y == 1)
+            aux_masks["tau_phi"] = tau_mask
+
+        if batch.get("charged_pion_targets") is not None:
+            cpt = batch["charged_pion_targets"].to(device)  # (batch, 3)
+            aux_labels["charged_pion_pt"]  = torch.log(cpt[:, 0])
+            aux_labels["charged_pion_eta"] = cpt[:, 1]
+            aux_labels["charged_pion_phi"] = cpt[:, 2]
+            
+            charged_pion_mask = ((y == 1) & (cpt[:, 0] != -999))
+            aux_masks["charged_pion_pt"]   = charged_pion_mask
+            aux_masks["charged_pion_eta"]  = charged_pion_mask
+            aux_masks["charged_pion_phi"]  = charged_pion_mask
+
+        if batch.get("neutral_pion_targets") is not None:
+            npt = batch["neutral_pion_targets"].to(device)  # (batch, 3)
+            aux_labels["neutral_pion_pt"]  = torch.log(npt[:, 0])
+            aux_labels["neutral_pion_eta"] = npt[:, 1]
+            aux_labels["neutral_pion_phi"] = npt[:, 2]
+            
+            neutral_pion_mask = ((y == 1) & (npt[:, 0] != -999))
+            aux_masks["neutral_pion_pt"]   = neutral_pion_mask
+            aux_masks["neutral_pion_eta"]  = neutral_pion_mask
+            aux_masks["neutral_pion_phi"]  = neutral_pion_mask
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -651,7 +674,7 @@ def run(
     if size > 1:
         model = DDP(
             model,
-            find_unused_parameters=False,
+            find_unused_parameters=True,
             **kwarg,
         )
 

@@ -153,6 +153,18 @@ def test_step(
             regression_truth_all.setdefault("tau_eta", []).append(tau_targets[:, 1])
             regression_truth_all.setdefault("tau_phi", []).append(tau_targets[:, 2])
 
+        if batch.get("charged_pion_targets") is not None:
+            cpt = batch["charged_pion_targets"].to(device)
+            regression_truth_all.setdefault("charged_pion_pt",  []).append(torch.log(cpt[:, 0]))
+            regression_truth_all.setdefault("charged_pion_eta", []).append(cpt[:, 1])
+            regression_truth_all.setdefault("charged_pion_phi", []).append(cpt[:, 2])
+
+        if batch.get("neutral_pion_targets") is not None:
+            npt = batch["neutral_pion_targets"].to(device)
+            regression_truth_all.setdefault("neutral_pion_pt",  []).append(torch.log(npt[:, 0]))
+            regression_truth_all.setdefault("neutral_pion_eta", []).append(npt[:, 1])
+            regression_truth_all.setdefault("neutral_pion_phi", []).append(npt[:, 2])
+
         if mode == "generator":
             if batch["pid"] is not None:
                 preds[-1] = torch.cat(

@@ -42,7 +42,7 @@ def collate_point_cloud(batch, max_part=5000):
     result = {"X": truncated_X, "y": labels}
 
     sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
-    jet_level_fields = ["cond", "decay_mode", "tau_targets"]
+    jet_level_fields = ["cond", "decay_mode", "tau_targets", "charged_pion_targets", "neutral_pion_targets"]
     # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
     # cells_per_cluster shares the cluster dimension with X and must be truncated
@@ -244,6 +244,8 @@ class HEPDataset(Dataset):
         tracks=None,
         cells_per_cluster=None,
         tau_targets=None,
+        charged_pion_targets=None,
+        neutral_pion_targets=None,
     ):
         sample = {}
 
@@ -290,6 +292,10 @@ class HEPDataset(Dataset):
         # Regression truth targets (e.g., TES correction)
         if tau_targets is not None and self.do_regression_aux_tasks:
             sample["tau_targets"] = torch.tensor(tau_targets, dtype=torch.float32)
+        if charged_pion_targets is not None and self.do_regression_aux_tasks:
+            sample["charged_pion_targets"] = torch.tensor(charged_pion_targets, dtype=torch.float32)
+        if neutral_pion_targets is not None and self.do_regression_aux_tasks:
+            sample["neutral_pion_targets"] = torch.tensor(neutral_pion_targets, dtype=torch.float32)
 
         return sample
 
@@ -303,6 +309,8 @@ class HEPDataset(Dataset):
         tracks = f["tracks"][sample_idx] if self.use_tracks and "tracks" in f else None
         cells = f["cells_per_cluster"][sample_idx] if self.use_cells and "cells_per_cluster" in f else None
         tau_targets = f["tau_targets"][sample_idx] if self.do_regression_aux_tasks and "tau_targets" in f else None
+        charged_pion_targets = f["charged_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "charged_pion_targets" in f else None
+        neutral_pion_targets = f["neutral_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "neutral_pion_targets" in f else None
 
         return self._build_sample(
             f["data"][sample_idx],
@@ -312,7 +320,9 @@ class HEPDataset(Dataset):
             decay_mode=decay_mode,
             tracks=tracks,
             cells_per_cluster=cells,
-            tau_targets=tau_targets
+            tau_targets=tau_targets,
+            charged_pion_targets=charged_pion_targets,
+            neutral_pion_targets=neutral_pion_targets,
         )
 
     def __getitems__(self, indices):
@@ -342,6 +352,8 @@ class HEPDataset(Dataset):
             batch_tracks = f["tracks"][sorted_indices] if self.use_tracks and "tracks" in f else None
             batch_cells = f["cells_per_cluster"][sorted_indices] if self.use_cells and "cells_per_cluster" in f else None
             batch_tau_targets = f["tau_targets"][sorted_indices] if "tau_targets" in f else None
+            batch_charged_pion = f["charged_pion_targets"][sorted_indices] if "charged_pion_targets" in f else None
+            batch_neutral_pion = f["neutral_pion_targets"][sorted_indices] if "neutral_pion_targets" in f else None
 
             for i, out_pos in enumerate(sorted_positions):
                 samples[out_pos] = self._build_sample(
@@ -353,6 +365,8 @@ class HEPDataset(Dataset):
                     tracks=batch_tracks[i] if batch_tracks is not None else None,
                     cells_per_cluster=batch_cells[i] if batch_cells is not None else None,
                     tau_targets=batch_tau_targets[i] if batch_tau_targets is not None else None,
+                    charged_pion_targets=batch_charged_pion[i] if batch_charged_pion is not None else None,
+                    neutral_pion_targets=batch_neutral_pion[i] if batch_neutral_pion is not None else None,
                 )
 
         return samples

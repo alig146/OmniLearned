@@ -125,8 +125,8 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
     fig, ax = plt.subplots(figsize=(6, 5))
     ConfusionMatrixDisplay(cm.T, display_labels=class_names).plot(
         ax=ax, cmap='Blues', values_format='d')
-    ax.set_xlabel('Predicted label')
-    ax.set_ylabel('True label')
+    ax.set_xlabel('True label')
+    ax.set_ylabel('Predicted label')
     ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Counts')
@@ -137,8 +137,8 @@ def plot_confusion_matrix(true_labels, pred_labels, class_names, output_dir):
     fig, ax = plt.subplots(figsize=(6, 5))
     ConfusionMatrixDisplay(cm_norm.T, display_labels=class_names).plot(
         ax=ax, cmap='Blues', values_format='.3f')
-    ax.set_xlabel('Predicted label')
-    ax.set_ylabel('True label')
+    ax.set_xlabel('True label')
+    ax.set_ylabel('Predicted label')
     ax.invert_yaxis()
     ax.grid(False)
     ax.set_title('Normalised by True Label')
@@ -202,7 +202,7 @@ def plot_tau_vs_qcd(predictions, true_labels, output_dir):
     save_plot(fig, f'{output_dir}/tau_vs_qcd_roc.png')
 
     # Background rejection
-    rejection = np.where(fpr > 0, 1.0 / fpr, np.inf)
+    rejection = np.divide(1.0, fpr, out=np.full_like(fpr, np.inf), where=fpr > 0)
     valid = rejection < 1e6
 
     fig, ax = setup_plot(
@@ -414,9 +414,10 @@ def analyze_regression_task(data, true_labels, output_dir):
             continue
 
         valid = np.isfinite(ground_truth) & np.isfinite(predictions)
-        n_dropped = (~valid).sum()
-        if n_dropped > 0:
-            print(f"\nWarning: Dropping {n_dropped} NaN/inf values for {task_name}.")
+        # only test on actual pions
+        if 'pion' in task_name:
+            pion_valid = (ground_truth != -999.0) & (predictions != -999.0)
+            valid = valid & pion_valid
         ground_truth = ground_truth[valid]
         predictions = predictions[valid]
 
@@ -444,92 +445,153 @@ def analyze_regression_task(data, true_labels, output_dir):
             'correlation': correlation, 'r_squared': r_squared,
         }
 
+        is_log = task_name in ("tes", "charged_pion_pt", "neutral_pion_pt")
+
+        # Determine which particle's kinematic variables to plot against.
+        # Keys match the aux_*_true arrays saved by evaluate.py.
+        if task_name.startswith('neutral_pion'):
+            kin_keys = [('neutral_pion_pt', True), ('neutral_pion_eta', False), ('neutral_pion_phi', False)]
+            particle_label = 'neutral π'
+        elif task_name.startswith('charged_pion'):
+            kin_keys = [('charged_pion_pt', True), ('charged_pion_eta', False), ('charged_pion_phi', False)]
+            particle_label = 'charged π'
+        else:
+            kin_keys = [('tes', True), ('tau_eta', False), ('tau_phi', False)]
+            particle_label = 'tau'
+
+        kin_vars = {}
+        for kin_key, kin_log in kin_keys:
+            kin_true_key = f'aux_{kin_key}_true'
+            if kin_true_key not in data.keys():
+                continue
+            kin_arr = data[kin_true_key][tau_mask].flatten()[valid]
+            if kin_log:
+                kin_arr = np.exp(kin_arr) / 1000  # log-MeV → GeV
+            if 'pt' in kin_key or kin_key == 'tes':
+                x_label = f'True {particle_label} $p_T$ [GeV]'
+                x_suffix = 'pt'
+            elif 'eta' in kin_key:
+                x_label = f'True {particle_label} $\\eta$'
+                x_suffix = 'eta'
+            else:
+                x_label = f'True {particle_label} $\\phi$'
+                x_suffix = 'phi'
+            kin_vars[x_suffix] = (kin_arr, x_label)
+
         _plot_regression_task(ground_truth, predictions, task_name, output_dir,
-                              log_scale=(task_name == "tes"))
+                              log_scale=is_log, kin_vars=kin_vars or None)
 
     return results
 
 
-def _plot_regression_task(ground_truth, predictions, task_name, output_dir, log_scale=False):
-    """Save one plot per regression diagnostic.
+def _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, output_dir, log_scale):
+    """Plot response and resolution curves vs a single kinematic variable.
+
+    Parameters
+    ----------
+    response : array
+        pred/truth (log_scale=True) or pred-truth (log_scale=False) for each event.
+    x_var : array
+        Kinematic variable to bin on (already in physical units, same length as response).
+    x_label : str
+        Axis label for x_var.
+    x_suffix : str
+        Short string used in the output filename, e.g. 'pt', 'eta', 'phi'.
+    log_scale : bool
+        Controls y-axis labelling and whether resolution is shown as a percentage.
+    """
+    from plotting.utils import response_curve, make_bins
+
+    if log_scale:
+        response_ylabel = f'Predicted / True {task_name}'
+        resol_ylabel = f'{task_name} response at 68% CL [%]'
+    else:
+        response_ylabel = f'Predicted - True {task_name}'
+        resol_ylabel = f'{task_name} residual at 68% CL'
+
+    result = response_curve(
+        response, x_var,
+        make_bins(x_var.min(), x_var.max(), 25), cl=0.68
+    )
+    if len(result[0]) == 0:
+        return
+    bins, bin_errors, means, errs, resol = result
+
+    fig, ax = setup_plot(xlabel=x_label, ylabel=response_ylabel, title="")
+    plt.errorbar(bins, means, errs, bin_errors, fmt='o', color='purple', label='ITF')
+    save_plot(fig, f'{output_dir}/{task_name}_response_vs_{x_suffix}.png')
+
+    fig, ax = setup_plot(xlabel=x_label, ylabel=resol_ylabel, title="")
+    plt.plot(bins, 100 * resol if log_scale else resol, color='purple', label='ITF')
+    save_plot(fig, f'{output_dir}/{task_name}_resolution_vs_{x_suffix}.png')
+
+
+def _plot_regression_task(ground_truth, predictions, task_name, output_dir, 
+                          log_scale=False, kin_vars=None):
+    """Save one set of plots per regression task.
 
     Parameters
     ----------
     log_scale : bool
-        If True, apply exp() before plotting the scatter and compute a
-        multiplicative response (exp(pred - truth)).  Use for targets stored
-        in log space (e.g. log-pt / tes).  Leave False for targets in natural
-        units (eta, phi).
+        If True, apply exp()/1000 before plotting (targets stored as log-MeV).
+        Use for pt-like targets (tes, charged_pion_pt, neutral_pion_pt).
+    kin_vars : dict or None
+        Mapping of {x_suffix: (x_array, x_label)} for kinematic variables to
+        plot response/resolution against.  Each array must already be filtered
+        to the same valid-event mask as ground_truth/predictions and must be
+        in physical units (GeV for pt, radians for eta/phi).
+        If None, falls back to plotting vs the task's own truth value.
     """
-    residuals = predictions - ground_truth
 
-    # Prediction vs ground truth
+    # Convert log-space pt targets to physical GeV
     if log_scale:
-        gt_plot = np.exp(ground_truth)
-        pred_plot = np.exp(predictions)
-    else:
-        gt_plot = ground_truth
-        pred_plot = predictions
-    min_val = min(gt_plot.min(), pred_plot.min())
-    max_val = max(gt_plot.max(), pred_plot.max())
-
-    fig, ax = setup_plot(
-        xlabel='Ground Truth',
-        ylabel='Prediction',
-        title=f'{task_name}: Prediction vs Ground Truth',
-    )
-    ax.scatter(gt_plot, pred_plot, alpha=0.5, s=10)
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect prediction')
-    ax.legend()
-    save_plot(fig, f'{output_dir}/{task_name}_pred_vs_truth.png')
-
-    # Residual distribution
-    fig, ax = setup_plot(
-        xlabel='Residuals',
-        ylabel='Frequency',
-        title=f'{task_name}: Residual Distribution',
-    )
-    ax.hist(residuals, bins=50, alpha=0.7, edgecolor='black')
-    ax.axvline(x=0, color='r', linestyle='--', lw=2)
-    save_plot(fig, f'{output_dir}/{task_name}_residual_dist.png')
+        ground_truth = np.exp(ground_truth) / 1000
+        predictions  = np.exp(predictions)  / 1000
 
     # Overlaid truth vs prediction distributions
-    
     bins = np.linspace(min(ground_truth.min(), predictions.min()),
-                    max(ground_truth.max(), predictions.max()), 51)
-    
+                       max(ground_truth.max(), predictions.max()), 51)
+
     fig, ax = setup_plot(
-        xlabel=f'{task_name}',
-        ylabel='Density',
-        title=f'{task_name}: Truth vs Prediction',
+        xlabel=f'{task_name}{" [GeV]" if log_scale else ""}',
+        ylabel='Events',
+        title='',
     )
-    ax.hist(ground_truth, bins=bins, label='Truth', color='steelblue', histtype="step")
-    ax.hist(predictions, bins=bins, label='Predictions', color='orange', histtype="step")
+    ax.hist(ground_truth, bins=bins, label='Truth',       color='steelblue', histtype="step")
+    ax.hist(predictions,  bins=bins, label='Predictions', color='orange',    histtype="step")
+    if log_scale:
+        ax.set_yscale("log")
+        ax.set_ylabel("Events (logged)")
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_pred_dist.png')
 
-    gt_counts, gt_edges = np.histogram(ground_truth, bins=bins)
-    pred_counts, pred_edges = np.histogram(predictions, bins=bins)
-    print(f'  {task_name} histogram integral — truth: {np.sum(gt_counts * np.diff(gt_edges)):.4f}, '
-          f'pred: {np.sum(pred_counts * np.diff(pred_edges)):.4f}')
-
-    # Response: exp(pred - truth) → ratio around 1.0, only valid for log-space targets
+    # Response lineshape histogram (ratio, only meaningful for pt tasks)
     if log_scale:
-        nonzero = ground_truth != 0
-        if nonzero.sum() > 0:
-            response = np.exp(predictions[nonzero] - ground_truth[nonzero])
-            fig, ax = setup_plot(
-                xlabel='Response (Prediction / Truth)',
-                ylabel='Density',
-                title=f'{task_name}: Response',
-                xlim=[0, 2],
-            )
-            ax.hist(response, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
-            ax.axvline(x=1.0, color='r', linestyle='--', lw=2, label='Perfect response')
-            ax.axvline(x=float(np.median(response)), color='k', linestyle='-', lw=1.5,
-                       label=f'Median = {np.median(response):.3f}')
-            ax.legend()
-            save_plot(fig, f'{output_dir}/{task_name}_response.png')
+        response_ratio = predictions / ground_truth
+        fig, ax = setup_plot(
+            xlabel=f'{task_name} response (pred/truth)',
+            ylabel='Events',
+            title='',
+        )
+        ax.hist(response_ratio, bins=np.linspace(0, 2, 75), label="ITF", histtype="step")
+        ax.set_yscale("log")
+        ax.legend()
+        save_plot(fig, f'{output_dir}/{task_name}_response.png')
+
+    # Compute per-event response: ratio for pt, additive residual for eta/phi
+    if log_scale:
+        response = predictions / ground_truth
+    else:
+        response = predictions - ground_truth
+
+    # Fall back to plotting vs the task's own truth if no kin_vars supplied
+    if kin_vars is None:
+        kin_vars = {
+            'truth': (ground_truth, f'True {task_name}{" [GeV]" if log_scale else ""}')
+        }
+
+    for x_suffix, (x_var, x_label) in kin_vars.items():
+        _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, output_dir, log_scale)
 
 
 # ---------------------------------------------------------------------------
@@ -584,13 +646,6 @@ def print_summary(accuracy, tau_vs_qcd_auc, dm_accuracy=None, regression_results
     if dm_accuracy is not None:
         print("\n[AUXILIARY TASK 1] Decay Mode (5-class)")
         print(f"  Accuracy: {dm_accuracy:.4f}")
-
-    if regression_results:
-        for task_name, metrics in regression_results.items():
-            print(f"\n[AUXILIARY TASK] {task_name.upper()} (Regression)")
-            print(f"  MAE:  {metrics['mae']:.6f}")
-            print(f"  RMSE: {metrics['rmse']:.6f}")
-            print(f"  R²:   {metrics['r_squared']:.4f}")
 
     if regression_results:
         for task_name, metrics in regression_results.items():
