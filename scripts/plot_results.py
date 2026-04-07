@@ -591,7 +591,8 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir,
         }
 
     for x_suffix, (x_var, x_label) in kin_vars.items():
-        _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, output_dir, log_scale)
+        _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, 
+                                   output_dir, log_scale)
 
 
 # ---------------------------------------------------------------------------

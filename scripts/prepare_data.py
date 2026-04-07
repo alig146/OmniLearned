@@ -96,21 +96,20 @@ CELL_BRANCHES = [
 ]
 
 TAU_REGRESSION_TARGETS = [
-    ("truth_pt", "truth_pt", False), 
-    ("truth_eta", "truth_eta", False),
-    ("truth_phi", "truth_phi", False),
+    ("truth_tau_Vispt", "truth_tau_Vispt", False), 
+    ("truth_tau_Viseta", "truth_tau_Viseta", False),
+    ("truth_tau_Visphi", "truth_tau_Visphi", False),
 ]
 
-MAX_PION_REGRESSION_TARGETS = 4
 CHARGED_PION_BRANCHES = [
-    ("truth_chargedPion_pt",  "truth_chargedPion_pt",  False),
-    ("truth_chargedPion_eta", "truth_chargedPion_eta", False),
-    ("truth_chargedPion_phi", "truth_chargedPion_phi", False),
+    ("truth_chargedPion_Vispt",  "truth_chargedPion_Vispt",  False),
+    ("truth_chargedPion_Viseta", "truth_chargedPion_Viseta", False),
+    ("truth_chargedPion_Visphi", "truth_chargedPion_Visphi", False),
 ]
 NEUTRAL_PION_BRANCHES = [
-    ("truth_neutralPion_pt",  "truth_neutralPion_pt",  False),
-    ("truth_neutralPion_eta", "truth_neutralPion_eta", False),
-    ("truth_neutralPion_phi", "truth_neutralPion_phi", False),
+    ("truth_neutralPion_Vispt",  "truth_neutralPion_Vispt",  False),
+    ("truth_neutralPion_Viseta", "truth_neutralPion_Viseta", False),
+    ("truth_neutralPion_Visphi", "truth_neutralPion_Visphi", False),
 ]
 PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
@@ -127,8 +126,43 @@ NUM_PION_FEATURES = 3  # pt, eta, phi
 NUM_TAU_TRACK_CLASSIFICATION_TARGETS = len(TAUTRACK_CLASSIFICATION_BRANCHES)
 
 
-OTHER_BRANCHES = [
-    "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
+DECAY_MODE = [
+    # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
+    "truth_decayMode",
+    "reco_TauNNDecayMode",
+    "reco_TauPanTauBDTDecayMode",
+]
+
+RECO_ID = [
+    "reco_TauRNNEleScore_Raw",
+    "reco_TauRNNEleScore_SigTrans",
+    "reco_TauRNNJetScore_Raw",
+    "reco_TauRNNJetScore_SigTrans",
+    "reco_TauGNNJetScore_Raw",
+    "reco_TauGNNJetScore_SigTrans",
+]
+
+# Currently, these are flattened vectors
+RECO_CHARGED_PION_4MOM = [
+    "reco_chargedPion_pt",
+    "reco_chargedPion_eta",
+    "reco_chargedPion_phi",
+    "tau_nChargedTracks" # use to split
+]
+RECO_NEUTRAL_PION_4MOM = [
+    "reco_PanTauPi0_pt",
+    "reco_PanTauPi0_eta",
+    "reco_PanTauPi0_phi",
+    "reco_PanTauPi0_n" # use to split
+]
+
+RECO_TAU_4MOM = [
+    "reco_TauPanTauCellBased_pt",
+    "reco_TauPanTauCellBased_eta",
+    "reco_TauPanTauCellBased_phi",
+    "reco_TauFinalCalib_pt",
+    "reco_TauFinalCalib_eta",
+    "reco_TauFinalCalib_phi"
 ]
 
 def get_all_branches(label=None, use_cells=True):
@@ -144,7 +178,11 @@ def get_all_branches(label=None, use_cells=True):
     branches += [b for _, b, _ in TRACK_BRANCHES]
     branches += [b for _, b, _ in TAU_REGRESSION_TARGETS]
     branches += [b for _, b, _ in PION_REGRESSION_TARGETS]
-    branches += OTHER_BRANCHES
+    branches += DECAY_MODE
+    branches += RECO_ID
+    branches += RECO_CHARGED_PION_4MOM
+    branches += RECO_NEUTRAL_PION_4MOM
+    branches += RECO_TAU_4MOM
     return list(set(branches))
 
 
@@ -189,21 +227,27 @@ def _vectorized_scalar_targets(events, feature_specs):
         out[:, feat_idx] = arr
     return out
 
+def _vectorized_scalar_targets_no_decorator(events, features):
+    """Build (N, N_features) array for per-event scalar regression targets."""
+    n = len(events)
+    n_feat = len(features)
+    out = np.zeros((n, n_feat), dtype=np.float32)
+    for feat_idx, branch_name in enumerate(features):
+        arr = ak.to_numpy(ak.flatten(events[branch_name])).astype(np.float32)
+        out[:, feat_idx] = arr
+    return out
+
 CHARGED_PION_MASS = 139.57018  # MeV
 NEUTRAL_PION_MASS = 134.97700  # MeV
 
-
-def _sum_pion_4vectors(events, pt_branch, eta_branch, phi_branch, mass_mev):
-    """Sum pion 4-vectors per event and return [N, 3] array of (pt_sum, eta_sum, phi_sum).
-
-    Builds a massive Momentum4D awkward array using the given pion mass, sums over
-    all pions per event with vector addition, then extracts pt/eta/phi of the result.
-    Events with no pions yield (-999, -999, -999).
-    """
-    pt_arr = events[pt_branch]
-    eta_arr = events[eta_branch]
-    phi_arr = events[phi_branch]
-    mass_arr = ak.full_like(pt_arr, mass_mev)
+def _temp_obtain_reco_pions_sum(events, pion_4mom: list[str], pion_mass=CHARGED_PION_MASS):
+    """Sum reco pion 4-vectors per event. pion_4mom is [pt_branch, eta_branch, phi_branch, ...].
+    Returns (N, 3) array of (pt_sum, eta_sum, phi_sum); events with no pions yield (-999, -999, -999)."""
+    pt_branch, eta_branch, phi_branch = pion_4mom[:3]
+    pt_arr   = events[pt_branch]
+    eta_arr  = events[eta_branch]
+    phi_arr  = events[phi_branch]
+    mass_arr = ak.full_like(pt_arr, pion_mass)
 
     pions = ak.zip(
         {"pt": pt_arr, "eta": eta_arr, "phi": phi_arr, "mass": mass_arr},
@@ -211,13 +255,12 @@ def _sum_pion_4vectors(events, pt_branch, eta_branch, phi_branch, mass_mev):
         behavior=vector.backends.awkward.behavior,
     )
     no_pions = ak.to_numpy(ak.num(pions, axis=1) == 0)
-    sum_vec = ak.sum(pions, axis=1)
+    sum_vec  = ak.sum(pions, axis=1)
 
     pt_sum  = ak.to_numpy(sum_vec.pt).astype(np.float32)
     eta_sum = ak.to_numpy(sum_vec.eta).astype(np.float32)
     phi_sum = ak.to_numpy(sum_vec.phi).astype(np.float32)
 
-    # default to -999 for later filtering
     pt_sum[no_pions]  = -999.0
     eta_sum[no_pions] = -999.0
     phi_sum[no_pions] = -999.0
@@ -288,8 +331,8 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     chunk_cells_pc = _vectorized_cells_per_cluster(
         label, events, CELL_BRANCHES, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, use_cells=use_cells)
 
-    # Labels
     chunk_pid = np.full(total_jets, label, dtype=np.int32)
+    
     dm = events["truth_decayMode"]
     dm_flat = ak.to_numpy(ak.flatten(dm)).astype(np.int32)
     if label == 1:
@@ -298,23 +341,30 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     else:
         chunk_decay_mode = np.full(total_jets, -1, dtype=np.int32)
 
-    # Tau regression targets — one scalar set per jet
+    # Truth regression targets
     chunk_tau_targets = _vectorized_scalar_targets(events, TAU_REGRESSION_TARGETS)
+    chunk_charged_pion_targets = _vectorized_scalar_targets(events, CHARGED_PION_BRANCHES)
+    chunk_neutral_pion_targets = _vectorized_scalar_targets(events, NEUTRAL_PION_BRANCHES)
+    
+    # Reco comparisons
+    chunk_reco_id = _vectorized_scalar_targets_no_decorator(events, RECO_ID)
+    chunk_reco_decay_mode = _vectorized_scalar_targets_no_decorator(events, DECAY_MODE[1:])
+    chunk_reco_tau_4mom = _vectorized_scalar_targets_no_decorator(events, RECO_TAU_4MOM)
+    chuck_reco_charged_pions = _temp_obtain_reco_pions_sum(events, RECO_CHARGED_PION_4MOM, 
+                                                           CHARGED_PION_MASS)
+    chuck_reco_neutral_pions = _temp_obtain_reco_pions_sum(events, RECO_NEUTRAL_PION_4MOM, 
+                                                        NEUTRAL_PION_MASS)
 
-    # Pion regression targets — sum all pions' 4-vectors per event, store (pt, eta, phi) of sum
-    chunk_charged_pion_targets = _sum_pion_4vectors(
-        events, "truth_chargedPion_pt", "truth_chargedPion_eta", "truth_chargedPion_phi",
-        mass_mev=CHARGED_PION_MASS)
-    chunk_neutral_pion_targets = _sum_pion_4vectors(
-        events, "truth_neutralPion_pt", "truth_neutralPion_eta", "truth_neutralPion_phi",
-        mass_mev=NEUTRAL_PION_MASS)
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
-    ### TO-DO ONGOING EDITS HERE
+    # TODO: ongoing edits
     chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
-            chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets, chunk_tau_track_targets)
+            chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets,
+            chunk_tau_track_targets,
+            chunk_reco_id, chunk_reco_decay_mode, chunk_reco_tau_4mom,
+            chuck_reco_charged_pions, chuck_reco_neutral_pions)
 
 
 def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
@@ -337,11 +387,11 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
             n_entries = f["CollectionTree"].num_entries
     except Exception as e:
         print(f"Error opening {filepath}: {e}")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     if n_entries == 0:
         print(f"File {filepath} is empty, skipping...")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     branches = get_all_branches(label=label, use_cells=use_cells)
     chunk_results = []
@@ -355,7 +405,7 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
 
     if len(chunk_results) == 0:
         print(f"  No jets in {filepath}")
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
@@ -366,16 +416,18 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
     all_charged_pion_targets = np.concatenate([r[6] for r in chunk_results], axis=0)
     all_neutral_pion_targets = np.concatenate([r[7] for r in chunk_results], axis=0)
     all_tau_track_targets = np.concatenate([r[8] for r in chunk_results], axis=0) if label == 1 else None
+    all_reco_id = np.concatenate([r[9]  for r in chunk_results], axis=0)
+    all_reco_decay_mode = np.concatenate([r[10] for r in chunk_results], axis=0)
+    all_reco_tau_4mom = np.concatenate([r[11] for r in chunk_results], axis=0)
+    all_reco_charged_pions = np.concatenate([r[12] for r in chunk_results], axis=0)
+    all_reco_neutral_pions = np.concatenate([r[13] for r in chunk_results], axis=0)
     del chunk_results
 
-    # cell_shape_msg = all_cells_pc.shape if all_cells_pc is not None else f"({len(all_data)}, {MAX_CLUSTERS}, {MAX_CELLS_PER_CLUSTER}, {NUM_CELL_FEATURES}) [zero-filled on write]"
-    # print(f"  Output: data={all_data.shape}, tracks={all_tracks.shape}, "
-    #       f"cells_pc={cell_shape_msg}, tau_targets={all_tau_targets.shape}, "
-    #       f"charged_pion_targets={all_charged_pion_targets.shape}, "
-    #       f"neutral_pion_targets={all_neutral_pion_targets.shape},"
-    #       f"tau_track_targets={all_tau_track_targets.shape if all_tau_track_targets is not None else 'N/A'}")
     return (all_data, all_tracks, all_cells_pc, all_pid, all_decay_mode,
-            all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets, all_tau_track_targets)
+            all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets,
+            all_tau_track_targets,
+            all_reco_id, all_reco_decay_mode, all_reco_tau_4mom,
+            all_reco_charged_pions, all_reco_neutral_pions)
 
 
 def _process_file_to_staging(args):
@@ -387,7 +439,8 @@ def _process_file_to_staging(args):
         raise RuntimeError(f"Error processing {filepath}: {e}") from e
     if result is None or result[0] is None:
         return None, 0
-    data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = result
+    (data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets,
+     tau_track_targets, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions) = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
@@ -415,26 +468,27 @@ def _process_file_to_staging(args):
             hf.create_dataset(
                 "tau_track_targets",
                 shape=(n_jets, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                dtype=np.float32, # Can be int, no?
+                dtype=np.float32,
                 compression="gzip",
                 fillvalue=0.0,
             )
+        hf.create_dataset("reco_id",            data=reco_id,            compression="gzip")
+        hf.create_dataset("reco_decay_mode",    data=reco_decay_mode,    compression="gzip")
+        hf.create_dataset("reco_tau_4mom",      data=reco_tau_4mom,      compression="gzip")
+        hf.create_dataset("reco_charged_pions", data=reco_charged_pions, compression="gzip")
+        hf.create_dataset("reco_neutral_pions", data=reco_neutral_pions, compression="gzip")
     return staging_path, n_jets
 
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare HDF5 datasets for OmniLearned")
-    parser.add_argument("--input_file", type=str, default=None,
-                        help="Single ROOT file to process (grid/batch mode)")
     parser.add_argument("--label", type=int, default=None,
                         help="Label for --input_file: 0=QCD, 1=tau, 2=electron")
-    parser.add_argument("--output_file", type=str, default=None,
-                        help="Output HDF5 path for single-file/grid mode")
     parser.add_argument("--input_dir", type=str,
                         default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/ntuples/",
                         help="Directory containing ROOT files")
     parser.add_argument("--output_dir", type=str,
-                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5_no_cells_new/tau",
+                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5/tau",
                         help="Directory to save HDF5 files")
     parser.add_argument("--train_frac", type=float, default=0.8)
     parser.add_argument("--val_frac", type=float, default=0.1)
@@ -458,123 +512,16 @@ def main():
     except ValueError:
         chunk_size = args.chunk_size  # e.g. "500 MB", "2 GB"
 
-    # ------------------------------------------------------------------ #
-    # Single-file / grid mode
-    # ------------------------------------------------------------------ #
-    if args.input_file is not None:
-        if args.label is None or args.output_file is None:
-            parser.error("--label and --output_file are required with --input_file")
-
-        data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = process_file(
-            args.input_file,
-            args.label,
-            chunk_size=chunk_size,
-            use_cells=use_cells,
-        )
-
-        output_dir = os.path.dirname(os.path.abspath(args.output_file))
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-
-        print(f"Saving {args.output_file}...")
-        with h5py.File(args.output_file, "w") as hf:
-            if data is None:
-                # Keep schema stable even when a file yields no jets.
-                hf.create_dataset(
-                    "data",
-                    shape=(0, MAX_CLUSTERS, NUM_CLUSTER_FEATURES),
-                    maxshape=(None, MAX_CLUSTERS, NUM_CLUSTER_FEATURES),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
-                hf.create_dataset(
-                    "tracks",
-                    shape=(0, MAX_TRACKS, NUM_TRACK_FEATURES),
-                    maxshape=(None, MAX_TRACKS, NUM_TRACK_FEATURES),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
-                if use_cells:
-                    hf.create_dataset(
-                        "cells_per_cluster",
-                        shape=(0, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
-                        maxshape=(None, MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
-                        dtype=np.float32,
-                        compression="gzip",
-                    )
-                hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
-                hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
-                hf.create_dataset(
-                    "tau_targets",
-                    shape=(0, NUM_TAU_REGRESSION_TARGETS),
-                    maxshape=(None, NUM_TAU_REGRESSION_TARGETS),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
-                hf.create_dataset(
-                    "charged_pion_targets",
-                    shape=(0, 3),
-                    maxshape=(None, 3),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
-                hf.create_dataset(
-                    "neutral_pion_targets",
-                    shape=(0, 3),
-                    maxshape=(None, 3),
-                    dtype=np.float32,
-                    compression="gzip",
-                )
-                hf.create_dataset(
-                    "tau_track_targets",
-                    shape=(0, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                    maxshape=(None, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                    dtype=np.float32, # Can be int, no?
-                    compression="gzip",
-                )
-            else:
-                hf.create_dataset("data", data=data, compression="gzip")
-                hf.create_dataset("tracks", data=tracks, compression="gzip")
-                if use_cells:
-                    if cells_pc is not None:
-                        hf.create_dataset("cells_per_cluster", data=cells_pc, compression="gzip")
-                    else:
-                        hf.create_dataset(
-                            "cells_per_cluster",
-                            shape=(len(data), MAX_CLUSTERS, MAX_CELLS_PER_CLUSTER, NUM_CELL_FEATURES),
-                            dtype=np.float32,
-                            compression="gzip",
-                            fillvalue=0.0,
-                        )
-                hf.create_dataset("pid", data=pid)
-                hf.create_dataset("decay_mode", data=decay_mode)
-                hf.create_dataset("tau_targets", data=tau_targets, compression="gzip")
-                hf.create_dataset("charged_pion_targets", data=charged_pion_targets, compression="gzip")
-                hf.create_dataset("neutral_pion_targets", data=neutral_pion_targets, compression="gzip")
-                if tau_track_targets is not None:
-                    hf.create_dataset("tau_track_targets", data=tau_track_targets, compression="gzip")
-                else:
-                    hf.create_dataset(
-                        "tau_track_targets",
-                        shape=(len(data), MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                        dtype=np.float32, # Can be int, no?
-                        compression="gzip",
-                        fillvalue=0.0,
-                    )
-
-        print("Done.")
-        return
-
     os.makedirs(args.output_dir, exist_ok=True)
 
-    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_03_23_26_Prod1_EXT0"
-    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_03_23_26_Prod1_EXT0"
-    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_23_26_Prod1_EXT0"
-    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_03_23_26_Prod1_EXT0"
-    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_03_23_26_Prod1_EXT0"
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_06_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_06_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_06_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_06_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_06_26_Prod1_EXT0"
 
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_30_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_06_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_06_26_Prod1_EXT0"
 
     num_files = args.num_files
     jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
