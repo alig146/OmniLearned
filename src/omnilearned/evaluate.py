@@ -33,7 +33,9 @@ def eval_model(
     rank=0,
     aux_regression_tasks=None,
 ):
-    prediction, cond, labels, aux_preds, decay_modes, regression_truth = test_step(model, test_loader, mode, device)
+    prediction, cond, labels, aux_preds, decay_modes, regression_truth, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions = test_step(  # noqa: E501
+        model, test_loader, mode, device
+    )
 
     if mode in ["classifier", "regression", "segmentation"]:
         if use_event_loss:
@@ -71,6 +73,20 @@ def eval_model(
             if decay_modes is not None:
                 save_dict["decay_mode"] = decay_modes.cpu().numpy()
 
+            # Add reco ID for event matching
+            if reco_id is not None:
+                save_dict["reco_id"] = reco_id.cpu().numpy()
+            if reco_decay_mode is not None:
+                save_dict["reco_decay_mode"] = reco_decay_mode.cpu().numpy()
+
+            # Add reco baseline 4-momenta for comparison plots
+            if reco_tau_4mom is not None:
+                save_dict["reco_tau_4mom"] = reco_tau_4mom.cpu().numpy()
+            if reco_charged_pions is not None:
+                save_dict["reco_charged_pions"] = reco_charged_pions.cpu().numpy()
+            if reco_neutral_pions is not None:
+                save_dict["reco_neutral_pions"] = reco_neutral_pions.cpu().numpy()
+
             np.savez(
                 os.path.join(outdir, f"outputs_{save_tag}_{dataset}_{rank}.npz"),
                 **save_dict,
@@ -99,6 +115,11 @@ def test_step(
     aux_preds_all = {}  # Collect auxiliary predictions
     decay_modes = []    # Collect true decay mode labels
     regression_truth_all = {}  # Collect regression truth labels
+    reco_id_all = []
+    reco_decay_mode_all = []
+    reco_tau_4mom_all = []
+    reco_charged_pions_all = []
+    reco_neutral_pions_all = []
 
     for ib, batch in enumerate(
         tqdm(dataloader, desc="Iterating", total=len(dataloader))
@@ -165,6 +186,18 @@ def test_step(
             regression_truth_all.setdefault("neutral_pion_eta", []).append(npt[:, 1])
             regression_truth_all.setdefault("neutral_pion_phi", []).append(npt[:, 2])
 
+        if batch.get("reco_id") is not None:
+            reco_id_all.append(batch["reco_id"].to(device))
+        if batch.get("reco_decay_mode") is not None:
+            reco_decay_mode_all.append(batch["reco_decay_mode"].to(device))
+
+        if batch.get("reco_tau_4mom") is not None:
+            reco_tau_4mom_all.append(batch["reco_tau_4mom"].to(device))
+        if batch.get("reco_charged_pions") is not None:
+            reco_charged_pions_all.append(batch["reco_charged_pions"].to(device))
+        if batch.get("reco_neutral_pions") is not None:
+            reco_neutral_pions_all.append(batch["reco_neutral_pions"].to(device))
+
         if mode == "generator":
             if batch["pid"] is not None:
                 preds[-1] = torch.cat(
@@ -190,11 +223,17 @@ def test_step(
     regression_truth_concat = {}
     for task_name, task_truths in regression_truth_all.items():
         regression_truth_concat[task_name] = torch.cat(task_truths).to(device)
-    
+
     if is_master_node() and not regression_truth_all:
         print("WARNING: No regression truth labels were collected from batches.")
         print("Make sure 'tau_targets' is included in the dataloader output.")
-    
+
+    reco_id_concat            = torch.cat(reco_id_all).to(device)            if reco_id_all            else None
+    reco_decay_mode_concat    = torch.cat(reco_decay_mode_all).to(device)   if reco_decay_mode_all   else None
+    reco_tau_4mom_concat     = torch.cat(reco_tau_4mom_all).to(device)     if reco_tau_4mom_all     else None
+    reco_charged_pions_concat = torch.cat(reco_charged_pions_all).to(device) if reco_charged_pions_all else None
+    reco_neutral_pions_concat = torch.cat(reco_neutral_pions_all).to(device) if reco_neutral_pions_all else None
+
     return (
         preds,
         torch.cat(conds).to(device) if conds[0] is not None else None,
@@ -202,6 +241,11 @@ def test_step(
         aux_preds_concat,
         decay_modes_concat,
         regression_truth_concat,
+        reco_id_concat,
+        reco_decay_mode_concat,
+        reco_tau_4mom_concat,
+        reco_charged_pions_concat,
+        reco_neutral_pions_concat,
     )
 
 

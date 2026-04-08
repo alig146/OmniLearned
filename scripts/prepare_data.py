@@ -481,102 +481,12 @@ def _process_file_to_staging(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare HDF5 datasets for OmniLearned")
-    parser.add_argument("--label", type=int, default=None,
-                        help="Label for --input_file: 0=QCD, 1=tau, 2=electron")
-    parser.add_argument("--input_dir", type=str,
-                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/ntuples/",
-                        help="Directory containing ROOT files")
-    parser.add_argument("--output_dir", type=str,
-                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5/tau",
-                        help="Directory to save HDF5 files")
-    parser.add_argument("--train_frac", type=float, default=0.8)
-    parser.add_argument("--val_frac", type=float, default=0.1)
-    parser.add_argument("--chunk_size", type=str, default="500 MB",
-        help="ROOT read chunk size: int (entries) or str (e.g. '500 MB', '2 GB'). Lower = less memory, more I/O.",
-    )
-    parser.add_argument("--workers", type=int, default=9,
-        help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
-    )
-    parser.add_argument(
-        "--no_cells", action="store_true", default=True,
-        help="Skip reading and saving cell features (cells_per_cluster). Reduces memory and disk usage.",
-    )
-    parser.add_argument("--num-files", type=int, default=None)
-    args = parser.parse_args()
-    use_cells = not args.no_cells
 
     # Parse chunk_size: int (entries) or str e.g. "500 MB" for uproot
     try:
         chunk_size = int(args.chunk_size)
     except ValueError:
         chunk_size = args.chunk_size  # e.g. "500 MB", "2 GB"
-
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_06_26_Prod1_EXT0"
-    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_06_26_Prod1_EXT0"
-    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_06_26_Prod1_EXT0"
-    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_06_26_Prod1_EXT0"
-    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_06_26_Prod1_EXT0"
-
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_06_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_06_26_Prod1_EXT0"
-
-    num_files = args.num_files
-    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
-    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
-    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
-    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
-    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
-
-    # Gammatautau files (label 1)
-    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name), 
-                                         num_files=num_files)
-    
-    # Gammaee files (label 2)
-    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name), 
-                                     num_files=num_files)
-    
-    files_and_labels = []
-
-    # Add JZ0 files with label 0
-    for fname in jz0_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
-
-    # Add JZ1 files with label 0
-    for fname in jz1_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
-
-    # Add JZ2 files with label 0
-    for fname in jz2_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
-
-    # Add JZ3 files with label 0
-    for fname in jz3_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
-
-    # Add JZ4 files with label 0
-    for fname in jz4_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
-
-    # Add Gammatautau files with label 1
-    for fname in gammatautau_files:
-        files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
-
-    # Add Gammaee files with label 2
-    for fname in gammaee_files:
-        files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
-
-    # Filter to existing files
-    valid_files = [(fp, lb) for fp, lb in files_and_labels if os.path.exists(fp)]
-    for fp, _ in files_and_labels:
-        if not os.path.exists(fp):
-            print(f"Warning: {fp} not found, skipping...")
-
-    if len(valid_files) == 0:
-        print("No data processed!")
-        return
 
     # Staging dir for per-file output (enables memory-efficient merge)
     staging_dir = os.path.join(args.output_dir, "_staging")
@@ -660,6 +570,11 @@ def main():
                 charged_pion_targets = sf["charged_pion_targets"][:]
                 neutral_pion_targets = sf["neutral_pion_targets"][:]
                 tau_track_targets = sf["tau_track_targets"][:]
+                reco_id = sf["reco_id"][:]
+                reco_decay_mode = sf["reco_decay_mode"][:]
+                reco_tau_4mom = sf["reco_tau_4mom"][:]
+                reco_charged_pions = sf["reco_charged_pions"][:]
+                reco_neutral_pions = sf["reco_neutral_pions"][:]
 
             if sample_shapes is None:
                 sample_shapes = (
@@ -686,26 +601,41 @@ def main():
                 cpt = charged_pion_targets[mask]
                 npt = neutral_pion_targets[mask]
                 ttt = tau_track_targets[mask]
+                rid = reco_id[mask]
+                rdm = reco_decay_mode[mask]
+                rt4 = reco_tau_4mom[mask]
+                rcp = reco_charged_pions[mask]
+                rnp = reco_neutral_pions[mask]
                 fp = split_files[split_name]
                 if split_name not in h5_handles:
                     h5_handles[split_name] = h5py.File(fp, "w")
-                    h5_handles[split_name].create_dataset("data", data=d, compression="gzip", 
+                    h5_handles[split_name].create_dataset("data", data=d, compression="gzip",
                                                           maxshape=(None,) + d.shape[1:])
-                    h5_handles[split_name].create_dataset("tracks", data=t, compression="gzip", 
+                    h5_handles[split_name].create_dataset("tracks", data=t, compression="gzip",
                                                           maxshape=(None,) + t.shape[1:])
                     if use_cells:
-                        h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc, 
+                        h5_handles[split_name].create_dataset("cells_per_cluster", data=cpc,
                                     compression="gzip", maxshape=(None,) + cpc.shape[1:])
                     h5_handles[split_name].create_dataset("pid", data=p, maxshape=(None,))
                     h5_handles[split_name].create_dataset("decay_mode", data=dm, maxshape=(None,))
-                    h5_handles[split_name].create_dataset("tau_targets", data=tt, 
+                    h5_handles[split_name].create_dataset("tau_targets", data=tt,
                                     compression="gzip", maxshape=(None,) + tt.shape[1:])
-                    h5_handles[split_name].create_dataset("charged_pion_targets", 
+                    h5_handles[split_name].create_dataset("charged_pion_targets",
                                     data=cpt, compression="gzip", maxshape=(None,) + cpt.shape[1:])
-                    h5_handles[split_name].create_dataset("neutral_pion_targets", 
+                    h5_handles[split_name].create_dataset("neutral_pion_targets",
                                     data=npt, compression="gzip", maxshape=(None,) + npt.shape[1:])
-                    h5_handles[split_name].create_dataset("tau_track_targets", 
+                    h5_handles[split_name].create_dataset("tau_track_targets",
                                     data=ttt, compression="gzip", maxshape=(None,) + ttt.shape[1:])
+                    h5_handles[split_name].create_dataset("reco_id",
+                                    data=rid, compression="gzip", maxshape=(None,) + rid.shape[1:])
+                    h5_handles[split_name].create_dataset("reco_decay_mode",
+                                    data=rdm, compression="gzip", maxshape=(None,) + rdm.shape[1:])
+                    h5_handles[split_name].create_dataset("reco_tau_4mom",
+                                    data=rt4, compression="gzip", maxshape=(None,) + rt4.shape[1:])
+                    h5_handles[split_name].create_dataset("reco_charged_pions",
+                                    data=rcp, compression="gzip", maxshape=(None,) + rcp.shape[1:])
+                    h5_handles[split_name].create_dataset("reco_neutral_pions",
+                                    data=rnp, compression="gzip", maxshape=(None,) + rnp.shape[1:])
                     split_offsets[split_name] = len(d)
                 else:
                     hf = h5_handles[split_name]
@@ -715,7 +645,10 @@ def main():
                         ("pid", p), ("decay_mode", dm),
                         ("tau_targets", tt),
                         ("charged_pion_targets", cpt), ("neutral_pion_targets", npt),
-                        ("tau_track_targets", ttt)
+                        ("tau_track_targets", ttt),
+                        ("reco_id", rid), ("reco_decay_mode", rdm),
+                        ("reco_tau_4mom", rt4),
+                        ("reco_charged_pions", rcp), ("reco_neutral_pions", rnp),
                     ]:
                         hf[ds_name].resize(split_offsets[split_name] + len(arr), axis=0)
                         hf[ds_name][split_offsets[split_name]:] = arr
@@ -809,7 +742,7 @@ def main():
     print(f"\n" + "="*60)
     print("TRAINING COMMAND")
     print("="*60)
-    print(f"\n  omnilearned train --dataset tau --path datasets \\")
+    print(f"\n  omnilearned train --dataset tau --path {args.output_dir} \\")
     print(f"    --num-feat {NUM_CLUSTER_FEATURES} --num-classes 3 \\")
     print(f"    --use-tracks --track-dim {NUM_TRACK_FEATURES} \\")
     print(f"    --use-cells --cell-dim {NUM_CELL_FEATURES} \\")
@@ -817,4 +750,99 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    
+    parser = argparse.ArgumentParser(description="Prepare HDF5 datasets for OmniLearned")
+    parser.add_argument("--label", type=int, default=None,
+                        help="Label for --input_file: 0=QCD, 1=tau, 2=electron")
+    parser.add_argument("--input_dir", type=str,
+                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/ntuples/",
+                        help="Directory containing ROOT files")
+    parser.add_argument("--output_dir", type=str,
+                        default="/global/cfs/projectdirs/m2616/TauCPML/DataTesting/processed_h5/tau",
+                        help="Directory to save HDF5 files")
+    parser.add_argument("--train_frac", type=float, default=0.8)
+    parser.add_argument("--val_frac", type=float, default=0.1)
+    parser.add_argument("--chunk_size", type=str, default="500 MB",
+        help="ROOT read chunk size: int (entries) or str (e.g. '500 MB', '2 GB'). Lower = less memory, more I/O.",
+    )
+    parser.add_argument("--workers", type=int, default=9,
+        help="Number of parallel workers for processing files. 1 = sequential. Use ≤ CPU cores; each worker uses ~chunk_size memory.",
+    )
+    parser.add_argument(
+        "--no_cells", action="store_true", default=True,
+        help="Skip reading and saving cell features (cells_per_cluster). Reduces memory and disk usage.",
+    )
+    parser.add_argument("--num-files", type=int, default=None, 
+                        help="Number of files to process from the given input dirs")
+    parser.add_argument("--staging-dir", type=str, default=None,
+                        help="Directory to store intermediate training samples. Default = args.output_dir/_staging")
+    args = parser.parse_args()
+    use_cells = not args.no_cells
+    
+    # Setup input data
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_06_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_06_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_06_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_06_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_06_26_Prod1_EXT0"
+
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_06_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_06_26_Prod1_EXT0"
+
+    num_files = args.num_files
+    jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
+
+    # Gammatautau files (label 1)
+    gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name), 
+                                         num_files=num_files)
+    
+    # Gammaee files (label 2)
+    gammaee_files = _list_root_files(os.path.join(args.input_dir, ee_rucio_name), 
+                                     num_files=num_files)
+    
+    files_and_labels = []
+
+    # Add JZ0 files with label 0
+    for fname in jz0_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
+
+    # Add JZ1 files with label 0
+    for fname in jz1_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
+
+    # Add JZ2 files with label 0
+    for fname in jz2_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
+
+    # Add JZ3 files with label 0
+    for fname in jz3_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
+
+    # Add JZ4 files with label 0
+    for fname in jz4_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
+
+    # Add Gammatautau files with label 1
+    for fname in gammatautau_files:
+        files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
+
+    # Add Gammaee files with label 2
+    for fname in gammaee_files:
+        files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
+
+    # Filter to existing files
+    valid_files = [(fp, lb) for fp, lb in files_and_labels if os.path.exists(fp)]
+    for fp, _ in files_and_labels:
+        if not os.path.exists(fp):
+            print(f"Warning: {fp} not found, skipping...")
+
+    if len(valid_files) == 0:
+        print("No data processed!")
+    else:
+        main()

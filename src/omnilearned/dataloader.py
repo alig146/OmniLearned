@@ -42,7 +42,9 @@ def collate_point_cloud(batch, max_part=5000):
     result = {"X": truncated_X, "y": labels}
 
     sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
-    jet_level_fields = ["cond", "decay_mode", "tau_targets", "charged_pion_targets", "neutral_pion_targets"]
+    jet_level_fields = ["cond", "decay_mode", "tau_targets", "charged_pion_targets",
+                        "neutral_pion_targets", "reco_tau_4mom", "reco_charged_pions",
+                        "reco_neutral_pions", "reco_id", "reco_decay_mode"]
     # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
     # cells_per_cluster shares the cluster dimension with X and must be truncated
@@ -179,7 +181,8 @@ class HEPDataset(Dataset):
             keys.append("cells_per_cluster")
         if self.do_regression_aux_tasks:
             keys.extend(["tau_targets", "charged_pion_targets", "neutral_pion_targets"])
-        keys.extend(["decay_mode", "data_pid"])
+        keys.extend(["decay_mode", "data_pid",
+                     "reco_id", "reco_decay_mode", "reco_tau_4mom", "reco_charged_pions", "reco_neutral_pions"])
         return keys
 
     def _prepare_npy_cache(self):
@@ -246,6 +249,11 @@ class HEPDataset(Dataset):
         tau_targets=None,
         charged_pion_targets=None,
         neutral_pion_targets=None,
+        reco_id=None,
+        reco_decay_mode=None,
+        reco_tau_4mom=None,
+        reco_charged_pions=None,
+        reco_neutral_pions=None,
     ):
         sample = {}
 
@@ -297,6 +305,19 @@ class HEPDataset(Dataset):
         if neutral_pion_targets is not None and self.do_regression_aux_tasks:
             sample["neutral_pion_targets"] = torch.tensor(neutral_pion_targets, dtype=torch.float32)
 
+        if reco_id is not None:
+            sample["reco_id"] = torch.tensor(reco_id, dtype=torch.float32)
+
+        if reco_decay_mode is not None:
+            sample["reco_decay_mode"] = torch.tensor(reco_decay_mode, dtype=torch.int64)
+
+        if reco_tau_4mom is not None:
+            sample["reco_tau_4mom"] = torch.tensor(reco_tau_4mom, dtype=torch.float32)
+        if reco_charged_pions is not None:
+            sample["reco_charged_pions"] = torch.tensor(reco_charged_pions, dtype=torch.float32)
+        if reco_neutral_pions is not None:
+            sample["reco_neutral_pions"] = torch.tensor(reco_neutral_pions, dtype=torch.float32)
+
         return sample
 
     def __getitem__(self, idx):
@@ -311,6 +332,11 @@ class HEPDataset(Dataset):
         tau_targets = f["tau_targets"][sample_idx] if self.do_regression_aux_tasks and "tau_targets" in f else None
         charged_pion_targets = f["charged_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "charged_pion_targets" in f else None
         neutral_pion_targets = f["neutral_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "neutral_pion_targets" in f else None
+        reco_id = f["reco_id"][sample_idx] if "reco_id" in f else None
+        reco_decay_mode = f["reco_decay_mode"][sample_idx] if "reco_decay_mode" in f else None
+        reco_tau_4mom = f["reco_tau_4mom"][sample_idx] if "reco_tau_4mom" in f else None
+        reco_charged_pions = f["reco_charged_pions"][sample_idx] if "reco_charged_pions" in f else None
+        reco_neutral_pions = f["reco_neutral_pions"][sample_idx] if "reco_neutral_pions" in f else None
 
         return self._build_sample(
             f["data"][sample_idx],
@@ -323,6 +349,11 @@ class HEPDataset(Dataset):
             tau_targets=tau_targets,
             charged_pion_targets=charged_pion_targets,
             neutral_pion_targets=neutral_pion_targets,
+            reco_id=reco_id,
+            reco_decay_mode=reco_decay_mode,
+            reco_tau_4mom=reco_tau_4mom,
+            reco_charged_pions=reco_charged_pions,
+            reco_neutral_pions=reco_neutral_pions,
         )
 
     def __getitems__(self, indices):
@@ -354,6 +385,11 @@ class HEPDataset(Dataset):
             batch_tau_targets = f["tau_targets"][sorted_indices] if "tau_targets" in f else None
             batch_charged_pion = f["charged_pion_targets"][sorted_indices] if "charged_pion_targets" in f else None
             batch_neutral_pion = f["neutral_pion_targets"][sorted_indices] if "neutral_pion_targets" in f else None
+            batch_reco_id = f["reco_id"][sorted_indices] if "reco_id" in f else None
+            batch_reco_decay_mode = f["reco_decay_mode"][sorted_indices] if "reco_decay_mode" in f else None
+            batch_reco_tau_4mom = f["reco_tau_4mom"][sorted_indices] if "reco_tau_4mom" in f else None
+            batch_reco_charged = f["reco_charged_pions"][sorted_indices] if "reco_charged_pions" in f else None
+            batch_reco_neutral = f["reco_neutral_pions"][sorted_indices] if "reco_neutral_pions" in f else None
 
             for i, out_pos in enumerate(sorted_positions):
                 samples[out_pos] = self._build_sample(
@@ -367,6 +403,11 @@ class HEPDataset(Dataset):
                     tau_targets=batch_tau_targets[i] if batch_tau_targets is not None else None,
                     charged_pion_targets=batch_charged_pion[i] if batch_charged_pion is not None else None,
                     neutral_pion_targets=batch_neutral_pion[i] if batch_neutral_pion is not None else None,
+                    reco_id=batch_reco_id[i] if batch_reco_id is not None else None,
+                    reco_decay_mode=batch_reco_decay_mode[i] if batch_reco_decay_mode is not None else None,
+                    reco_tau_4mom=batch_reco_tau_4mom[i] if batch_reco_tau_4mom is not None else None,
+                    reco_charged_pions=batch_reco_charged[i] if batch_reco_charged is not None else None,
+                    reco_neutral_pions=batch_reco_neutral[i] if batch_reco_neutral is not None else None,
                 )
 
         return samples
