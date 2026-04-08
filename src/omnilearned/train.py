@@ -359,7 +359,9 @@ def train_model(
     else:
         gscaler = None
     for epoch in range(int(epoch_init), num_epochs):
-        if isinstance(
+        if hasattr(train_loader.batch_sampler, "set_epoch"):
+            train_loader.batch_sampler.set_epoch(epoch)
+        elif isinstance(
             train_loader.sampler, torch.utils.data.distributed.DistributedSampler
         ):
             train_loader.sampler.set_epoch(epoch)

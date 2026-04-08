@@ -434,13 +434,16 @@ def analyze_decay_mode(data, true_labels, output_dir):
     # Confusion matrices — model + two reco baselines
     print("Plotting decay mode confusion matrices...")
 
-    _save_dm_confusion(dm_true_valid, dm_pred_labels, 'model', 'Model', n_classes_plot, prong_names, output_dir)
+    _save_dm_confusion(dm_true_valid, dm_pred_labels, 'model', 'Model', 
+                       n_classes_plot, prong_names, output_dir)
 
     reco_decay_mode = data.get('reco_decay_mode')
     if reco_decay_mode is not None:
         reco_dm_valid = reco_decay_mode[valid_mask]
-        _save_dm_confusion(dm_true_valid, reco_dm_valid[:, 0], 'rnn', 'TauNNDecayMode', n_classes_plot, prong_names, output_dir)
-        _save_dm_confusion(dm_true_valid, reco_dm_valid[:, 1], 'pantau', 'TauPanTauBDTDecayMode', n_classes_plot, prong_names, output_dir)
+        _save_dm_confusion(dm_true_valid, reco_dm_valid[:, 0], 'rnn', 'TauNNDecayMode', 
+                           n_classes_plot, prong_names, output_dir)
+        _save_dm_confusion(dm_true_valid, reco_dm_valid[:, 1], 'pantau', 'TauPanTauBDTDecayMode', 
+                           n_classes_plot, prong_names, output_dir)
 
     # ROC curves
     print("Plotting decay mode ROC curves...")
@@ -583,7 +586,7 @@ def analyze_regression_task(data, true_labels, output_dir):
 
         # Build baseline_responses: reco values in physical units, same valid mask applied.
         # reco_tau_4mom cols: [PanTau_pt, PanTau_eta, PanTau_phi, TauFinalCalib_pt, 
-        #                                           TauFinalCalib_eta, TauFinalCalib_phi]
+        #                      TauFinalCalib_eta, TauFinalCalib_phi]
         # reco_charged_pions cols: [pt, eta, phi]   (summed tracks, in MeV)
         # reco_neutral_pions cols: [pt, eta, phi]   (PanTauPi0, in MeV)
         baseline_responses = None

@@ -10,6 +10,48 @@ import numpy as np
 from pathlib import Path
 
 
+class FileGroupedBatchSampler(torch.utils.data.Sampler):
+    """
+    Yields batch indices grouped by file for mmap cache locality.
+    Shuffles file order and within-file order each epoch via set_epoch().
+    """
+
+    def __init__(self, file_indices, batch_size, drop_last=False):
+        self._batch_size = batch_size
+        self._drop_last = drop_last
+        self._epoch = 0
+
+        self._by_file = {}
+        for pos, (file_idx, _) in enumerate(file_indices):
+            self._by_file.setdefault(file_idx, []).append(pos)
+        self._total = len(file_indices)
+
+    def set_epoch(self, epoch):
+        self._epoch = epoch
+
+    def __iter__(self):
+        rng = np.random.default_rng(self._epoch)
+        file_keys = list(self._by_file.keys())
+        rng.shuffle(file_keys)
+
+        all_indices = []
+        for fk in file_keys:
+            positions = list(self._by_file[fk])
+            rng.shuffle(positions)
+            all_indices.extend(positions)
+
+        for start in range(0, len(all_indices), self._batch_size):
+            batch = all_indices[start : start + self._batch_size]
+            if self._drop_last and len(batch) < self._batch_size:
+                continue
+            yield batch
+
+    def __len__(self):
+        if self._drop_last:
+            return self._total // self._batch_size
+        return (self._total + self._batch_size - 1) // self._batch_size
+
+
 def collate_point_cloud(batch, max_part=5000):
     """
     Collate function for point clouds and labels with truncation performed per batch.
@@ -565,16 +607,28 @@ def load_data(
 
     loader_kwargs = {
         "dataset": data,
-        "batch_size": batch,
         "pin_memory": torch.cuda.is_available(),
-        "shuffle": shuffle,
-        "sampler": None,
         "num_workers": num_workers,
         "drop_last": False,
         "collate_fn": collate_point_cloud,
     }
+
+    if shuffle:
+        batch_sampler = FileGroupedBatchSampler(
+            data.file_indices[: len(data)], batch, drop_last=False
+        )
+        loader_kwargs["batch_sampler"] = batch_sampler
+        loader_kwargs["batch_size"] = 1  # required by DataLoader API but ignored
+        loader_kwargs["shuffle"] = False
+        loader_kwargs["sampler"] = None
+    else:
+        loader_kwargs["batch_size"] = batch
+        loader_kwargs["shuffle"] = False
+        loader_kwargs["sampler"] = None
+
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 4
 
     loader = DataLoader(**loader_kwargs)
     return loader

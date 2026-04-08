@@ -105,11 +105,13 @@ CHARGED_PION_BRANCHES = [
     ("truth_chargedPion_Vispt",  "truth_chargedPion_Vispt",  False),
     ("truth_chargedPion_Viseta", "truth_chargedPion_Viseta", False),
     ("truth_chargedPion_Visphi", "truth_chargedPion_Visphi", False),
+    ("truth_nChargedPion", "truth_nChargedPion", False)
 ]
 NEUTRAL_PION_BRANCHES = [
     ("truth_neutralPion_Vispt",  "truth_neutralPion_Vispt",  False),
     ("truth_neutralPion_Viseta", "truth_neutralPion_Viseta", False),
     ("truth_neutralPion_Visphi", "truth_neutralPion_Visphi", False),
+    ("truth_nNeutralPion", "truth_nNeutralPion", False)
 ]
 PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
@@ -345,6 +347,14 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     chunk_tau_targets = _vectorized_scalar_targets(events, TAU_REGRESSION_TARGETS)
     chunk_charged_pion_targets = _vectorized_scalar_targets(events, CHARGED_PION_BRANCHES)
     chunk_neutral_pion_targets = _vectorized_scalar_targets(events, NEUTRAL_PION_BRANCHES)
+
+    # Mask pt/eta/phi to -999 when pion count is zero
+    n_charged_idx = next(i for i, (n, _, _) in enumerate(CHARGED_PION_BRANCHES) if n == "truth_nChargedPion")
+    n_neutral_idx = next(i for i, (n, _, _) in enumerate(NEUTRAL_PION_BRANCHES) if n == "truth_nNeutralPion")
+    no_charged = chunk_charged_pion_targets[:, n_charged_idx] == 0
+    no_neutral = chunk_neutral_pion_targets[:, n_neutral_idx] == 0
+    chunk_charged_pion_targets[no_charged, :n_charged_idx] = -999.0
+    chunk_neutral_pion_targets[no_neutral, :n_neutral_idx] = -999.0
     
     # Reco comparisons
     chunk_reco_id = _vectorized_scalar_targets_no_decorator(events, RECO_ID)
