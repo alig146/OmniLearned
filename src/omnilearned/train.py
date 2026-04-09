@@ -105,7 +105,7 @@ def train_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info", "tracks"]
+            for key in ["cond", "pid", "add_info", "tracks", "cells_per_cluster"]
             if key in batch
         }
 
@@ -119,13 +119,48 @@ def train_step(
         aux_masks = {}
         if batch.get("decay_mode") is not None:
             aux_labels["decay_mode"] = batch["decay_mode"].to(device)
-            aux_masks["decay_mode"] = (y == 1)  # Only taus
+            # only taus and those with valid decay modes
+            aux_masks["decay_mode"] = ((y == 1)  
+                & (aux_labels["decay_mode"] != 5) & (aux_labels["decay_mode"] != 6))
         
         # Electron vs QCD: derived from pid
         aux_tasks = (model.module.aux_tasks if hasattr(model, 'module') else model.aux_tasks) or []
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+        
+        # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
+        if batch.get("tau_targets") is not None:
+            tau_mask = (y == 1)
+            tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
+            aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
+            aux_masks["tes"] = tau_mask
+            aux_labels["tau_eta"] = tau_targets[:, 1]
+            aux_masks["tau_eta"] = tau_mask
+            aux_labels["tau_phi"] = tau_targets[:, 2]
+            aux_masks["tau_phi"] = tau_mask
+
+        if batch.get("charged_pion_targets") is not None:
+            cpt = batch["charged_pion_targets"].to(device)  # (batch, 3)
+            aux_labels["charged_pion_pt"]  = torch.log(cpt[:, 0])
+            aux_labels["charged_pion_eta"] = cpt[:, 1]
+            aux_labels["charged_pion_phi"] = cpt[:, 2]
+            
+            charged_pion_mask = ((y == 1) & (cpt[:, 0] != -999))
+            aux_masks["charged_pion_pt"]   = charged_pion_mask
+            aux_masks["charged_pion_eta"]  = charged_pion_mask
+            aux_masks["charged_pion_phi"]  = charged_pion_mask
+
+        if batch.get("neutral_pion_targets") is not None:
+            npt = batch["neutral_pion_targets"].to(device)  # (batch, 3)
+            aux_labels["neutral_pion_pt"]  = torch.log(npt[:, 0])
+            aux_labels["neutral_pion_eta"] = npt[:, 1]
+            aux_labels["neutral_pion_phi"] = npt[:, 2]
+            
+            neutral_pion_mask = ((y == 1) & (npt[:, 0] != -999))
+            aux_masks["neutral_pion_pt"]   = neutral_pion_mask
+            aux_masks["neutral_pion_eta"]  = neutral_pion_mask
+            aux_masks["neutral_pion_phi"]  = neutral_pion_mask
 
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
@@ -145,6 +180,7 @@ def train_step(
                 data_pid=data_pid,
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
+                aux_tasks=aux_tasks if aux_tasks else None,
             )
 
         if use_amp and gscaler is not None:
@@ -228,7 +264,7 @@ def val_step(
         X, y = batch["X"].to(device, dtype=torch.float), batch["y"].to(device)
         model_kwargs = {
             key: (batch[key].to(device) if batch[key] is not None else None)
-            for key in ["cond", "pid", "add_info", "tracks"]
+            for key in ["cond", "pid", "add_info", "tracks", "cells_per_cluster"]
             if key in batch
         }
 
@@ -249,6 +285,16 @@ def val_step(
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
+        
+        # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
+        if batch.get("tau_targets") is not None:
+            tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
+            aux_labels["tes"] = torch.log(tau_targets[:, 0])  # log(pt in MeV) ≈ [9.9, 13.8]
+            aux_masks["tes"] = (y == 1)  # Only tau samples
+            aux_labels["tau_eta"] = tau_targets[:, 1]
+            aux_masks["tau_eta"] = (y == 1)
+            aux_labels["tau_phi"] = tau_targets[:, 2]
+            aux_masks["tau_phi"] = (y == 1)
 
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
@@ -265,6 +311,7 @@ def val_step(
                 data_pid=data_pid,
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
+                aux_tasks=aux_tasks if aux_tasks else None,
             )
 
     if dist.is_initialized():
@@ -312,7 +359,9 @@ def train_model(
     else:
         gscaler = None
     for epoch in range(int(epoch_init), num_epochs):
-        if isinstance(
+        if hasattr(train_loader.batch_sampler, "set_epoch"):
+            train_loader.batch_sampler.set_epoch(epoch)
+        elif isinstance(
             train_loader.sampler, torch.utils.data.distributed.DistributedSampler
         ):
             train_loader.sampler.set_epoch(epoch)
@@ -459,11 +508,25 @@ def run(
     # Auxiliary tasks: comma-separated "name:num_classes" pairs
     # e.g., "decay_mode:7,electron_vs_qcd:2"
     aux_tasks_str: str = "",
+    # Regression auxiliary tasks: comma-separated names
+    # e.g., "pt_regression,eta_regression"
+    aux_regression_tasks_str: str = "",
     # Option B: Tracks as separate tokens
     use_tracks: bool = False,
     track_dim: int = 24,
+    # Learned per-cluster cell aggregation
+    use_cells: bool = False,
+    cell_dim: int = 14,
 ):
     local_rank, rank, size = ddp_setup()
+
+    # Derive whether to load regression aux targets from dataloader
+    do_regression_aux_tasks = bool(aux_regression_tasks_str)
+
+    # Parse regression task names
+    regression_task_names = set()
+    if aux_regression_tasks_str:
+        regression_task_names = set(name.strip() for name in aux_regression_tasks_str.split(","))
 
     # Parse auxiliary tasks
     aux_tasks = None
@@ -471,7 +534,14 @@ def run(
         aux_tasks = []
         for task_def in aux_tasks_str.split(","):
             name, num_cls = task_def.strip().split(":")
-            aux_tasks.append({"name": name, "num_classes": int(num_cls)})
+            task_info = {"name": name}
+            # Mark as regression or classification
+            if name in regression_task_names:
+                task_info["type"] = "regression"
+            else:
+                task_info["type"] = "classification"
+                task_info["num_classes"] = int(num_cls)
+            aux_tasks.append(task_info)
 
     model_params = get_model_parameters(model_size)
     # set up model
@@ -497,6 +567,8 @@ def run(
         aux_tasks=aux_tasks,
         use_tracks=use_tracks,
         track_dim=track_dim,
+        use_cells=use_cells,
+        cell_dim=cell_dim,
         **model_params,
     )
 
@@ -528,6 +600,8 @@ def run(
         mode=mode,
         nevts=nevts,
         use_tracks=use_tracks,
+        use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
     )
     if rank == 0:
         print("**** Setup ****")
@@ -550,6 +624,8 @@ def run(
         clip_inputs=clip_inputs,
         mode=mode,
         use_tracks=use_tracks,
+        use_cells=use_cells,
+        do_regression_aux_tasks=do_regression_aux_tasks,
     )
 
     param_groups = get_param_groups(
@@ -600,7 +676,7 @@ def run(
     if size > 1:
         model = DDP(
             model,
-            find_unused_parameters=False,
+            find_unused_parameters=True,
             **kwarg,
         )
 

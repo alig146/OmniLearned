@@ -41,6 +41,13 @@ Or optionally, if the current package is out-of-date:
 pip install -e .
 ```
 
+```
+pip uninstall torch torchvision torchaudio triton -y
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+```
+
+Finally, if use of the exact environment we used to train is desired, the docker image at `docker.io/milescb/taucp-omni:torch2.10.0-cuda13.0`. 
+
 
 ## Data
 

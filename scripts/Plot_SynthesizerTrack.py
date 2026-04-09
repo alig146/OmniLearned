@@ -2,7 +2,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
-BaseDir='/pscratch/sd/n/nkyriaco/TauCP/TauRecoML/OmniLearned/plots/PerTrackFeatures/'
+BaseDir='/pscratch/sd/n/nkyriaco/TauCP/TauRecoML/OmniLearned/plots/03_23_26/PerTrackFeatures/'
 ProcessDir = BaseDir + 'Process/'
 DecayModeDir = BaseDir + 'DecayMode/' 
 
@@ -18,7 +18,7 @@ with PdfPages('PerTrack_Kinematics_DecayModeBreakdown.pdf') as pdf:
     image_list = []
     for trk_idx in range(MaxTracks):  # Loop over the (pT-sorted) track indices
         for feature in TrackFeatureNames:  # Loop over the features for each track
-            img_path = f"{DecayModeDir}track_by_decay_mode_{trk_idx}thTrack_trk_{feature}.png"
+            img_path = f"{DecayModeDir}track_by_decay_mode_track_{trk_idx}_trk_{feature}.png"
             image_list.append((img_path, f"Track {trk_idx} - {feature}"))
     
     # Create pages with 4 images per page (2x2 grid)
@@ -49,7 +49,7 @@ with PdfPages('PerTrack_Kinematics_ProcessBreakdown.pdf') as pdf:
     image_list = []
     for trk_idx in range(MaxTracks):  # Loop over the (pT-sorted) track indices
         for feature in TrackFeatureNames:  # Loop over the features for each track
-            img_path = f"{ProcessDir}track_{trk_idx}_trk_{feature}.png"
+            img_path = f"{ProcessDir}track_track_{trk_idx}_trk_{feature}.png"
             image_list.append((img_path, f"Track {trk_idx} - {feature}"))
     
     # Create pages with 4 images per page (2x2 grid)

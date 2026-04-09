@@ -2,7 +2,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
-BaseDir='/pscratch/sd/n/nkyriaco/TauCP/TauRecoML/OmniLearned/plots/PerClusterFeatures/'
+BaseDir='/pscratch/sd/n/nkyriaco/TauCP/TauRecoML/OmniLearned/plots/03_23_26/PerClusterFeatures/'
 ProcessDir = BaseDir + 'Process/'
 DecayModeDir = BaseDir + 'DecayMode/' 
 
@@ -17,7 +17,7 @@ with PdfPages('PerCluster_Kinematics_DecayModeBreakdown.pdf') as pdf:
     image_list = []
     for cls_idx in range(MaxClusters):  # Loop over the (pT-sorted) cluster indices
         for feature in ClusterFeatureNames:  # Loop over the features for each cluster
-            img_path = f"{DecayModeDir}cluster_by_decay_mode_{cls_idx}thCluster__cls_{feature}.png"
+            img_path = f"{DecayModeDir}cluster_by_decay_mode_cluster_{cls_idx}_cls_{feature}.png"
             image_list.append((img_path, f"Cluster {cls_idx} - {feature}"))
     
     # Create pages with 4 images per page (2x2 grid)
@@ -48,7 +48,7 @@ with PdfPages('PerCluster_Kinematics_ProcessBreakdown.pdf') as pdf:
     image_list = []
     for cls_idx in range(MaxClusters):  # Loop over the (pT-sorted) cluster indices
         for feature in ClusterFeatureNames:  # Loop over the features for each cluster
-            img_path = f"{ProcessDir}cluster_{cls_idx}_cls_{feature}.png"
+            img_path = f"{ProcessDir}cluster_cluster_{cls_idx}_cls_{feature}.png"
             image_list.append((img_path, f"Cluster {cls_idx} - {feature}"))
     
     # Create pages with 4 images per page (2x2 grid)
