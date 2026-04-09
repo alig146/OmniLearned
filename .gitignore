@@ -5,6 +5,7 @@ __pycache__
 
 samples/
 datasets/
+logs/
 
 # Data files and plots
 *.png
