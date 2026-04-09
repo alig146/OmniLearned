@@ -19,7 +19,7 @@ export MASTER_ADDR=$(hostname)
 cmd="omnilearned train \
    --dataset tau --path /pscratch/sd/m/milescb/processed_h5/ \
    --num-feat 12 --num-classes 3 --use-tracks --track-dim 16 \
-   --size medium --epoch 35 --batch 512 --output_dir checkpoints \
+   --size medium --epoch 35 --batch 512 --output_dir checkpoints --wandb \
    --aux-tasks-str='decay_mode:5,tes:1,tau_eta:1,tau_phi:1,charged_pion_pt:1,charged_pion_eta:1,charged_pion_phi:1,neutral_pion_pt:1,neutral_pion_eta:1,neutral_pion_phi:1' \
    --aux-regression-tasks-str='tes,tau_eta,tau_phi,charged_pion_pt,charged_pion_eta,charged_pion_phi,neutral_pion_pt,neutral_pion_eta,neutral_pion_phi'"
 

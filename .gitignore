@@ -6,6 +6,7 @@ __pycache__
 samples/
 datasets/
 logs/
+wandb/
 
 # Data files and plots
 *.png
