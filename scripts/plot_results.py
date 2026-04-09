@@ -565,7 +565,7 @@ def analyze_regression_task(data, true_labels, output_dir):
                         ('charged_pion_phi', False)]
             particle_label = 'charged π'
         else:
-            kin_keys = [('tau_pt', True), ('tau_eta', False), ('tau_phi', False)]
+            kin_keys = [('tes', True), ('tau_eta', False), ('tau_phi', False)]
             particle_label = 'tau'
 
         kin_vars = {}
@@ -576,7 +576,7 @@ def analyze_regression_task(data, true_labels, output_dir):
             kin_arr = data[kin_true_key][tau_mask].flatten()[valid]
             if kin_log:
                 kin_arr = np.exp(kin_arr) / 1000  # log-MeV → GeV
-            if 'pt' in kin_key:
+            if 'pt' in kin_key or kin_key == 'tes':
                 x_label = f'True {particle_label} $p_T$ [GeV]'
                 x_suffix = 'pt'
             elif 'eta' in kin_key:

@@ -147,8 +147,8 @@ def plot_learning_rate(metrics, output_dir):
 def main():
     parser = argparse.ArgumentParser(description="Plot training metrics from log file.")
     parser.add_argument("log", help="Path to training log file")
-    parser.add_argument("-o", "--output-dir", default="plots/results",
-                        help="Directory to save plots (default: plots/results)")
+    parser.add_argument("-o", "--output-dir", default="results/",
+                        help="Directory to save plots (default: results/)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
