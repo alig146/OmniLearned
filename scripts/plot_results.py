@@ -529,6 +529,9 @@ def analyze_regression_task(data, true_labels, output_dir):
             print(f"\nWarning: No valid samples for {task_name}, skipping.")
             continue
 
+        if task_name == 'tes':
+            task_name = 'tau_pt'
+
         mae = mean_absolute_error(ground_truth, predictions)
         mse = mean_squared_error(ground_truth, predictions)
         rmse = np.sqrt(mse)
@@ -549,7 +552,7 @@ def analyze_regression_task(data, true_labels, output_dir):
             'correlation': correlation, 'r_squared': r_squared,
         }
 
-        is_log = task_name in ("tes", "charged_pion_pt", "neutral_pion_pt")
+        is_log = task_name in ("tau_pt", "charged_pion_pt", "neutral_pion_pt")
 
         # Determine which particle's kinematic variables to plot against.
         # Keys match the aux_*_true arrays saved by evaluate.py.
@@ -562,7 +565,7 @@ def analyze_regression_task(data, true_labels, output_dir):
                         ('charged_pion_phi', False)]
             particle_label = 'charged π'
         else:
-            kin_keys = [('tes', True), ('tau_eta', False), ('tau_phi', False)]
+            kin_keys = [('tau_pt', True), ('tau_eta', False), ('tau_phi', False)]
             particle_label = 'tau'
 
         kin_vars = {}
@@ -573,7 +576,7 @@ def analyze_regression_task(data, true_labels, output_dir):
             kin_arr = data[kin_true_key][tau_mask].flatten()[valid]
             if kin_log:
                 kin_arr = np.exp(kin_arr) / 1000  # log-MeV → GeV
-            if 'pt' in kin_key or kin_key == 'tes':
+            if 'pt' in kin_key:
                 x_label = f'True {particle_label} $p_T$ [GeV]'
                 x_suffix = 'pt'
             elif 'eta' in kin_key:
@@ -607,9 +610,9 @@ def analyze_regression_task(data, true_labels, output_dir):
             elif task_name.endswith('_phi'):
                 baseline_responses = {'Reco': reco_cp[:, 2]}
         elif 'reco_tau_4mom' in data:
-            # tau tasks: tes / tau_eta / tau_phi
+            # tau tasks: tau_pt / tau_eta / tau_phi
             reco_t4 = data['reco_tau_4mom'][tau_mask][valid]
-            if task_name == 'tes':
+            if task_name == 'tau_pt':
                 baseline_responses = {
                     'PanTau':   reco_t4[:, 0] / 1000,   # MeV → GeV
                     'Combined': reco_t4[:, 3] / 1000,
@@ -663,6 +666,13 @@ def _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, ou
         response_ylabel = f'Predicted - True {task_name}'
         resol_ylabel = f'{task_name} residual at 68% CL'
 
+    if x_suffix == 'pt':
+        mask = (x_var >= 0) & (x_var <= 1000)
+        x_var = x_var[mask]
+        response = response[mask]
+        if baselines:
+            baselines = {k: v[mask] for k, v in baselines.items()}
+
     bins_def = make_bins(x_var.min(), x_var.max(), 25)
 
     result = response_curve(response, x_var, bins_def, cl=0.68)
@@ -680,6 +690,9 @@ def _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, ou
             bl_bins, bl_bin_errs, bl_means, bl_errs, _ = bl_result
             plt.errorbar(bl_bins, bl_means, bl_errs, bl_bin_errs, fmt='s', 
                          color=color, label=bl_label)
+    ylo, yhi = ax.get_ylim()
+    if yhi > 100 or ylo < -100:
+        ax.set_ylim(max(ylo, -50), min(yhi, 50))
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_response_vs_{x_suffix}.png')
 
@@ -691,8 +704,11 @@ def _plot_response_vs_variable(response, x_var, x_label, x_suffix, task_name, ou
             if len(bl_result[0]) == 0:
                 continue
             bl_bins, _, _, _, bl_resol = bl_result
-            plt.plot(bl_bins, 100 * bl_resol if log_scale else bl_resol, 
+            plt.plot(bl_bins, 100 * bl_resol if log_scale else bl_resol,
                      color=color, label=bl_label)
+    ylo, yhi = ax.get_ylim()
+    if yhi > 100 or ylo < -100:
+        ax.set_ylim(max(ylo, -50), min(yhi, 50))
     ax.legend()
     save_plot(fig, f'{output_dir}/{task_name}_resolution_vs_{x_suffix}.png')
 
@@ -705,7 +721,7 @@ def _plot_regression_task(ground_truth, predictions, task_name, output_dir,
     ----------
     log_scale : bool
         If True, apply exp()/1000 before plotting (targets stored as log-MeV).
-        Use for pt-like targets (tes, charged_pion_pt, neutral_pion_pt).
+        Use for pt-like targets (tau_pt, charged_pion_pt, neutral_pion_pt).
     kin_vars : dict or None
         Mapping of {x_suffix: (x_array, x_label)} for kinematic variables to
         plot response/resolution against.  Each array must already be filtered
