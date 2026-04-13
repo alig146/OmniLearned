@@ -281,6 +281,7 @@ def run(
     track_dim: int = 24,
     use_cells: bool = False,
     cell_dim: int = 14,
+    do_vertex_classification: bool = False,
 ):
     local_rank, rank, size = ddp_setup()
 
@@ -308,6 +309,17 @@ def run(
                 task_info["type"] = "classification"
                 task_info["num_classes"] = int(num_classes_aux)
             aux_tasks.append(task_info)
+
+    if do_vertex_classification:
+        vertex_task = {
+            "name": "vertex_classification",
+            "type": "classification",
+            "num_classes": 20,
+        }
+        if aux_tasks is None:
+            aux_tasks = [vertex_task]
+        elif not any(t["name"] == "vertex_classification" for t in aux_tasks):
+            aux_tasks.append(vertex_task)
 
     # set up model
     model = PET2(
@@ -363,6 +375,7 @@ def run(
         use_cells=use_cells,
         do_regression_aux_tasks=do_regression_aux_tasks,
         shuffle=False,
+        do_vertex_classification=do_vertex_classification,
     )
     if rank == 0:
         print("**** Setup ****")

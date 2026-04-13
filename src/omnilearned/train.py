@@ -117,6 +117,8 @@ def train_step(
         # Auxiliary task labels (pid: 0=QCD, 1=tau, 2=electron)
         aux_labels = {}
         aux_masks = {}
+        aux_slot_masks = None # For vertex classification task to mask zero-padded vertex slots
+        
         if batch.get("decay_mode") is not None:
             aux_labels["decay_mode"] = batch["decay_mode"].to(device)
             # only taus and those with valid decay modes
@@ -162,6 +164,14 @@ def train_step(
             aux_masks["neutral_pion_eta"]  = neutral_pion_mask
             aux_masks["neutral_pion_phi"]  = neutral_pion_mask
 
+        if batch.get("tau_vertex_targets") is not None:
+            vtx = batch["tau_vertex_targets"].to(device)  # [B, MAX_VERTICES, 1]
+            # With deterministic vertex ordering and exactly one true tau vertex,
+            # train a softmax head over the vertex slots.
+            aux_labels["vertex_classification"] = (vtx[:, :, 0] == 1).float().argmax(dim=1)  # [B]
+            aux_masks["vertex_classification"] = (y == 1)  # tau events only
+            aux_slot_masks = batch["vertex_slot_mask"].to(device) if batch.get("vertex_slot_mask") is not None else None
+
         with amp.autocast(
             "cuda:{}".format(device) if torch.cuda.is_available() else "cpu",
             enabled=use_amp,
@@ -181,6 +191,7 @@ def train_step(
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
                 aux_tasks=aux_tasks if aux_tasks else None,
+                aux_slot_masks=aux_slot_masks if aux_slot_masks is not None else None,
             )
 
         if use_amp and gscaler is not None:
@@ -276,6 +287,8 @@ def val_step(
         # Auxiliary task labels (pid: 0=QCD, 1=tau, 2=electron)
         aux_labels = {}
         aux_masks = {}
+        aux_slot_masks = None # For vertex classification task to mask zero-padded vertex slots
+
         if batch.get("decay_mode") is not None:
             aux_labels["decay_mode"] = batch["decay_mode"].to(device)
             aux_masks["decay_mode"] = (y == 1)  # Only taus
@@ -296,6 +309,12 @@ def val_step(
             aux_labels["tau_phi"] = tau_targets[:, 2]
             aux_masks["tau_phi"] = (y == 1)
 
+        if batch.get("tau_vertex_targets") is not None:
+            vtx = batch["tau_vertex_targets"].to(device)  # [B, MAX_VERTICES, 1]
+            aux_labels["vertex_classification"] = (vtx[:, :, 0] == 1).float().argmax(dim=1)  # [B]
+            aux_masks["vertex_classification"] = (y == 1)
+            aux_slot_masks = batch["vertex_slot_mask"].to(device) if batch.get("vertex_slot_mask") is not None else None
+
         with torch.no_grad():
             outputs = model(X, y, **model_kwargs)
             get_loss(
@@ -312,6 +331,7 @@ def val_step(
                 aux_labels=aux_labels if aux_labels else None,
                 aux_masks=aux_masks if aux_masks else None,
                 aux_tasks=aux_tasks if aux_tasks else None,
+                aux_slot_masks=aux_slot_masks if aux_slot_masks is not None else None,
             )
 
     if dist.is_initialized():
@@ -517,6 +537,7 @@ def run(
     # Learned per-cluster cell aggregation
     use_cells: bool = False,
     cell_dim: int = 14,
+    do_vertex_classification: bool = False,
 ):
     local_rank, rank, size = ddp_setup()
 
@@ -542,6 +563,19 @@ def run(
                 task_info["type"] = "classification"
                 task_info["num_classes"] = int(num_cls)
             aux_tasks.append(task_info)
+
+    # Include vertex classification task when requested
+    _MAX_VERTICES_PER_TAU = 20
+    if do_vertex_classification:
+        vertex_task = {
+            "name": "vertex_classification",
+            "type": "classification",
+            "num_classes": _MAX_VERTICES_PER_TAU,
+        }
+        if aux_tasks is None:
+            aux_tasks = [vertex_task]
+        elif not any(t["name"] == "vertex_classification" for t in aux_tasks):
+            aux_tasks.append(vertex_task)
 
     model_params = get_model_parameters(model_size)
     # set up model
@@ -602,6 +636,7 @@ def run(
         use_tracks=use_tracks,
         use_cells=use_cells,
         do_regression_aux_tasks=do_regression_aux_tasks,
+        do_vertex_classification=do_vertex_classification,
     )
     if rank == 0:
         print("**** Setup ****")
@@ -626,6 +661,7 @@ def run(
         use_tracks=use_tracks,
         use_cells=use_cells,
         do_regression_aux_tasks=do_regression_aux_tasks,
+        do_vertex_classification=do_vertex_classification,
     )
 
     param_groups = get_param_groups(

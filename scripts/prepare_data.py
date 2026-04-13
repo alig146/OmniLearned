@@ -39,6 +39,7 @@ vector.register_awkward()
 MAX_CLUSTERS = 20
 MAX_TRACKS = 20
 MAX_CELLS_PER_CLUSTER = 10
+MAX_VERTICES_PER_TAU = 20
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -119,6 +120,9 @@ TAUTRACK_CLASSIFICATION_BRANCHES = [
     ("trk_truthType", "trk_truthType", False), # Could be trk_originClass (need to double-check) # 0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT
 ]
 
+TAUVERTEX_CLASSIFICATION_BRANCHES = [
+    ("truth_tauVertex", "truth_tauVertex", False)
+] # I will redefine the labels we feed into OMNI via the following # 0,8=Undefined; 1 = TTT; 2 = CT, 3,4 = IT (balled as 3), 5,6,7 = FT (balled as 4) 
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
@@ -126,7 +130,7 @@ NUM_CELL_FEATURES = len(CELL_BRANCHES)
 NUM_TAU_REGRESSION_TARGETS = len(TAU_REGRESSION_TARGETS)
 NUM_PION_FEATURES = 3  # pt, eta, phi
 NUM_TAU_TRACK_CLASSIFICATION_TARGETS = len(TAUTRACK_CLASSIFICATION_BRANCHES)
-
+NUM_TAU_VERTEX_CLASSIFICATION_TARGETS = len(TAUVERTEX_CLASSIFICATION_BRANCHES)
 
 DECAY_MODE = [
     # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
@@ -146,35 +150,36 @@ RECO_ID = [
 
 # Currently, these are flattened vectors
 RECO_CHARGED_PION_4MOM = [
-    "reco_chargedPion_pt",
-    "reco_chargedPion_eta",
-    "reco_chargedPion_phi",
+    "reco_chargedPion_Vispt",
+    "reco_chargedPion_Viseta",
+    "reco_chargedPion_Visphi",
     "tau_nChargedTracks" # use to split
 ]
 RECO_NEUTRAL_PION_4MOM = [
-    "reco_PanTauPi0_pt",
-    "reco_PanTauPi0_eta",
-    "reco_PanTauPi0_phi",
+    "reco_PanTauPi0_Vispt",
+    "reco_PanTauPi0_Viseta",
+    "reco_PanTauPi0_Visphi",
     "reco_PanTauPi0_n" # use to split
 ]
 
 RECO_TAU_4MOM = [
-    "reco_TauPanTauCellBased_pt",
-    "reco_TauPanTauCellBased_eta",
-    "reco_TauPanTauCellBased_phi",
-    "reco_TauFinalCalib_pt",
-    "reco_TauFinalCalib_eta",
-    "reco_TauFinalCalib_phi"
+    "reco_tau_PanTauCellBased_Vispt",
+    "reco_tau_PanTauCellBased_Viseta",
+    "reco_tau_PanTauCellBased_Visphi",
+    "reco_tau_FinalCalib_Vispt",
+    "reco_tau_FinalCalib_Viseta",
+    "reco_tau_FinalCalib_Visphi"
 ]
 
 def get_all_branches(label=None, use_cells=True):
     """Get list of all branches to read. Only includes cell branches for tau (label=1)."""
     branches = []
 
-    if label == 1:
+    if label == 1: # Only need to read in some branches for non-taus
         if use_cells:
             branches += [b for _, b, _ in CELL_BRANCHES] 
         branches += [b for _, b, _ in TAUTRACK_CLASSIFICATION_BRANCHES]
+        branches += [b for _, b, _ in TAUVERTEX_CLASSIFICATION_BRANCHES] 
 
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
@@ -356,14 +361,16 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     chunk_charged_pion_targets[no_charged, :n_charged_idx] = -999.0
     chunk_neutral_pion_targets[no_neutral, :n_neutral_idx] = -999.0
     
+    # Tau vertices targets - vector of vertices per jet, only for tau jets, else None to avoid large zero arrays
+    chunk_tau_vertex_targets = _vectorized_point_cloud(events, TAUVERTEX_CLASSIFICATION_BRANCHES, MAX_VERTICES_PER_TAU).astype(np.int32) if label == 1 else None
+    chunk_num_vertices = ak.to_numpy(ak.num(events["truth_tauVertex"], axis=1)).astype(np.int32) if label == 1 else None
+    chunk_vertex_slot_mask = ( np.arange(MAX_VERTICES_PER_TAU)[None, :] < chunk_num_vertices[:, None] ).astype(np.bool_) if label == 1 else None # [N, MAX_VERTICES_PER_TAU] False for 0-padded vertex slots
     # Reco comparisons
     chunk_reco_id = _vectorized_scalar_targets_no_decorator(events, RECO_ID)
     chunk_reco_decay_mode = _vectorized_scalar_targets_no_decorator(events, DECAY_MODE[1:])
     chunk_reco_tau_4mom = _vectorized_scalar_targets_no_decorator(events, RECO_TAU_4MOM)
-    chuck_reco_charged_pions = _temp_obtain_reco_pions_sum(events, RECO_CHARGED_PION_4MOM, 
-                                                           CHARGED_PION_MASS)
-    chuck_reco_neutral_pions = _temp_obtain_reco_pions_sum(events, RECO_NEUTRAL_PION_4MOM, 
-                                                        NEUTRAL_PION_MASS)
+    chuck_reco_charged_pions = _temp_obtain_reco_pions_sum(events, RECO_CHARGED_PION_4MOM, CHARGED_PION_MASS)
+    chuck_reco_neutral_pions = _temp_obtain_reco_pions_sum(events, RECO_NEUTRAL_PION_4MOM, NEUTRAL_PION_MASS)
 
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
@@ -372,7 +379,7 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
             chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets,
-            chunk_tau_track_targets,
+            chunk_tau_track_targets, chunk_tau_vertex_targets, chunk_vertex_slot_mask,
             chunk_reco_id, chunk_reco_decay_mode, chunk_reco_tau_4mom,
             chuck_reco_charged_pions, chuck_reco_neutral_pions)
 
@@ -397,11 +404,11 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
             n_entries = f["CollectionTree"].num_entries
     except Exception as e:
         print(f"Error opening {filepath}: {e}")
-        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     if n_entries == 0:
         print(f"File {filepath} is empty, skipping...")
-        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     branches = get_all_branches(label=label, use_cells=use_cells)
     chunk_results = []
@@ -415,7 +422,7 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
 
     if len(chunk_results) == 0:
         print(f"  No jets in {filepath}")
-        return None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
     all_data = np.concatenate([r[0] for r in chunk_results], axis=0)
     all_tracks = np.concatenate([r[1] for r in chunk_results], axis=0)
@@ -426,16 +433,18 @@ def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
     all_charged_pion_targets = np.concatenate([r[6] for r in chunk_results], axis=0)
     all_neutral_pion_targets = np.concatenate([r[7] for r in chunk_results], axis=0)
     all_tau_track_targets = np.concatenate([r[8] for r in chunk_results], axis=0) if label == 1 else None
-    all_reco_id = np.concatenate([r[9]  for r in chunk_results], axis=0)
-    all_reco_decay_mode = np.concatenate([r[10] for r in chunk_results], axis=0)
-    all_reco_tau_4mom = np.concatenate([r[11] for r in chunk_results], axis=0)
-    all_reco_charged_pions = np.concatenate([r[12] for r in chunk_results], axis=0)
-    all_reco_neutral_pions = np.concatenate([r[13] for r in chunk_results], axis=0)
+    all_tau_vertex_targets = np.concatenate([r[9] for r in chunk_results], axis=0) if label == 1 else None
+    all_vertex_slot_mask = np.concatenate([r[10] for r in chunk_results], axis=0) if label == 1 else None
+    all_reco_id = np.concatenate([r[11]  for r in chunk_results], axis=0)
+    all_reco_decay_mode = np.concatenate([r[12] for r in chunk_results], axis=0)
+    all_reco_tau_4mom = np.concatenate([r[13] for r in chunk_results], axis=0)
+    all_reco_charged_pions = np.concatenate([r[14] for r in chunk_results], axis=0)
+    all_reco_neutral_pions = np.concatenate([r[15] for r in chunk_results], axis=0)
     del chunk_results
 
     return (all_data, all_tracks, all_cells_pc, all_pid, all_decay_mode,
             all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets,
-            all_tau_track_targets,
+            all_tau_track_targets, all_tau_vertex_targets, all_vertex_slot_mask,
             all_reco_id, all_reco_decay_mode, all_reco_tau_4mom,
             all_reco_charged_pions, all_reco_neutral_pions)
 
@@ -450,7 +459,7 @@ def _process_file_to_staging(args):
     if result is None or result[0] is None:
         return None, 0
     (data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets,
-     tau_track_targets, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions) = result
+     tau_track_targets, tau_vertex_targets, vertex_slot_mask, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions) = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
@@ -478,10 +487,31 @@ def _process_file_to_staging(args):
             hf.create_dataset(
                 "tau_track_targets",
                 shape=(n_jets, MAX_TRACKS, NUM_TAU_TRACK_CLASSIFICATION_TARGETS),
-                dtype=np.float32,
+                dtype=np.int32,
                 compression="gzip",
-                fillvalue=0.0,
+                fillvalue=0,
             )
+        if tau_vertex_targets is not None:
+            hf.create_dataset("tau_vertex_targets", data=tau_vertex_targets, compression="gzip")
+        else:
+            hf.create_dataset(
+                "tau_vertex_targets",
+                shape=(n_jets, MAX_VERTICES_PER_TAU, NUM_TAU_VERTEX_CLASSIFICATION_TARGETS),
+                dtype=np.int32,
+                compression="gzip",
+                fillvalue=0,
+            )
+        if vertex_slot_mask is not None:
+            hf.create_dataset("vertex_slot_mask", data=vertex_slot_mask, compression="gzip")
+        else:
+            hf.create_dataset(
+                "vertex_slot_mask",
+                shape=(n_jets, MAX_VERTICES_PER_TAU),
+                dtype=np.bool_,
+                compression="gzip",
+                fillvalue=False,
+            )
+
         hf.create_dataset("reco_id",            data=reco_id,            compression="gzip")
         hf.create_dataset("reco_decay_mode",    data=reco_decay_mode,    compression="gzip")
         hf.create_dataset("reco_tau_4mom",      data=reco_tau_4mom,      compression="gzip")
@@ -580,6 +610,8 @@ def main():
                 charged_pion_targets = sf["charged_pion_targets"][:]
                 neutral_pion_targets = sf["neutral_pion_targets"][:]
                 tau_track_targets = sf["tau_track_targets"][:]
+                tau_vertex_targets = sf["tau_vertex_targets"][:]
+                tau_vertex_slot_mask = sf["vertex_slot_mask"][:]
                 reco_id = sf["reco_id"][:]
                 reco_decay_mode = sf["reco_decay_mode"][:]
                 reco_tau_4mom = sf["reco_tau_4mom"][:]
@@ -590,7 +622,8 @@ def main():
                 sample_shapes = (
                     data.shape[1:], tracks.shape[1:], cells_pc.shape[1:] if use_cells else None,
                     tau_targets.shape[1:], charged_pion_targets.shape[1:],
-                    neutral_pion_targets.shape[1:], tau_track_targets.shape[1:]
+                    neutral_pion_targets.shape[1:], tau_track_targets.shape[1:], tau_vertex_targets.shape[1:], tau_vertex_slot_mask.shape[1:], 
+                    reco_id.shape[1:], reco_decay_mode.shape[1:],
                 )
 
             n = len(data)
@@ -611,6 +644,8 @@ def main():
                 cpt = charged_pion_targets[mask]
                 npt = neutral_pion_targets[mask]
                 ttt = tau_track_targets[mask]
+                tvt = tau_vertex_targets[mask]
+                tvsm = tau_vertex_slot_mask[mask]
                 rid = reco_id[mask]
                 rdm = reco_decay_mode[mask]
                 rt4 = reco_tau_4mom[mask]
@@ -636,6 +671,10 @@ def main():
                                     data=npt, compression="gzip", maxshape=(None,) + npt.shape[1:])
                     h5_handles[split_name].create_dataset("tau_track_targets",
                                     data=ttt, compression="gzip", maxshape=(None,) + ttt.shape[1:])
+                    h5_handles[split_name].create_dataset("tau_vertex_targets",
+                                    data=tvt, compression="gzip", maxshape=(None,) + tvt.shape[1:])
+                    h5_handles[split_name].create_dataset("vertex_slot_mask",
+                                    data=tvsm, compression="gzip", maxshape=(None,) + tvsm.shape[1:])
                     h5_handles[split_name].create_dataset("reco_id",
                                     data=rid, compression="gzip", maxshape=(None,) + rid.shape[1:])
                     h5_handles[split_name].create_dataset("reco_decay_mode",
@@ -656,6 +695,8 @@ def main():
                         ("tau_targets", tt),
                         ("charged_pion_targets", cpt), ("neutral_pion_targets", npt),
                         ("tau_track_targets", ttt),
+                        ("tau_vertex_targets", tvt),
+                        ("vertex_slot_mask", tvsm),
                         ("reco_id", rid), ("reco_decay_mode", rdm),
                         ("reco_tau_4mom", rt4),
                         ("reco_charged_pions", rcp), ("reco_neutral_pions", rnp),
@@ -721,6 +762,7 @@ def main():
         cpt_shape = f["charged_pion_targets"].shape
         npt_shape = f["neutral_pion_targets"].shape
         ttt_shape = f["tau_track_targets"].shape
+        tvt_shape = f["tau_vertex_targets"].shape
     print(f"\n  data (clusters): (N, {dshape[1]}, {dshape[2]})")
     print(f"    - {MAX_CLUSTERS} clusters x {NUM_CLUSTER_FEATURES} features")
     print(f"    - First 4: dEta, dPhi, log(et), log(e)")
@@ -739,6 +781,10 @@ def main():
     print("    - (pt, eta, phi) of 4-vector sum of neutral pions per event")
     print(f"\n  tau_track_targets: (N, {ttt_shape[1]}, {ttt_shape[2]})")
     print(f"    - up to {MAX_TRACKS} tracks x {NUM_TAU_TRACK_CLASSIFICATION_TARGETS} features (tau_track_class), 0-padded")
+    print(f"\n  tau_vertex_targets: (N, {tvt_shape[1]}, {tvt_shape[2]})")
+    print(f"    - up to {MAX_VERTICES_PER_TAU} vertices x {NUM_TAU_VERTEX_CLASSIFICATION_TARGETS} features (tau_vertex_class), 0-padded")
+    print(f"\n  tau_vertex_slot_mask: (N, {tvt_shape[1]})")
+    print(f"    - up to {MAX_VERTICES_PER_TAU} vertices x 1 feature (tau_vertex_slot_mask), 0-padded")
     print(f"\nCluster features ({NUM_CLUSTER_FEATURES}):")
     for i, (name, _, _) in enumerate(CLUSTER_BRANCHES):
         print(f"    {i}: {name}")
@@ -756,6 +802,7 @@ def main():
     print(f"    --num-feat {NUM_CLUSTER_FEATURES} --num-classes 3 \\")
     print(f"    --use-tracks --track-dim {NUM_TRACK_FEATURES} \\")
     print(f"    --use-cells --cell-dim {NUM_CELL_FEATURES} \\")
+    print(f"    --do-vertex-classification \\") # To toggle it on or off
     print(f"    --aux-tasks-str 'decay_mode:5'")
 
 
@@ -792,21 +839,21 @@ if __name__ == "__main__":
     # Setup input data
     os.makedirs(args.output_dir, exist_ok=True)
 
-    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_06_26_Prod1_EXT0"
-    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_06_26_Prod1_EXT0"
-    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_06_26_Prod1_EXT0"
-    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_06_26_Prod1_EXT0"
-    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_06_26_Prod1_EXT0"
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_10_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_10_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_10_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_10_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_10_26_Prod1_EXT0"
 
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_06_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_06_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_10_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_10_26_Prod1_EXT0"
 
     num_files = args.num_files
     jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
-    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
-    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
-    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
-    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
+    #jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
+    #jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
+    #jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
+    #jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
 
     # Gammatautau files (label 1)
     gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name), 
@@ -823,28 +870,28 @@ if __name__ == "__main__":
         files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
 
     # Add JZ1 files with label 0
-    for fname in jz1_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
+    #for fname in jz1_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
 
     # Add JZ2 files with label 0
-    for fname in jz2_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
+    #for fname in jz2_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
 
     # Add JZ3 files with label 0
-    for fname in jz3_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
+    #for fname in jz3_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
 
     # Add JZ4 files with label 0
-    for fname in jz4_files:
-        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
+    #for fname in jz4_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
 
     # Add Gammatautau files with label 1
-    for fname in gammatautau_files:
-        files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
+    #for fname in gammatautau_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
 
     # Add Gammaee files with label 2
-    for fname in gammaee_files:
-        files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
+    #for fname in gammaee_files:
+    #    files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
 
     # Filter to existing files
     valid_files = [(fp, lb) for fp, lb in files_and_labels if os.path.exists(fp)]

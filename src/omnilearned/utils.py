@@ -219,6 +219,7 @@ def get_loss(
     aux_weights=None,  # Dict: {"decay_mode": 0.5, "electron": 0.5, ...}
     aux_masks=None,  # Dict: {"decay_mode": mask, ...} for conditional tasks
     aux_tasks=None,  # List of task dicts with "type" field for regression vs classification
+    aux_slot_masks=None, # Mask for auxiliary vertexing task (mask zero-padded vertex slots)
 ):
     loss = 0.0
     if outputs["y_pred"] is not None:
@@ -314,6 +315,9 @@ def get_loss(
             # Filter out invalid labels; skip integer-range check for regression tasks
             if task_type == "regression":
                 valid = torch.ones(len(task_labels), dtype=torch.bool, device=task_labels.device)
+            elif task_type == "binary_sequence":
+                # All binary (0/1) slots are valid; keep per-sample mask to allow batch indexing
+                valid = torch.ones(len(task_labels), dtype=torch.bool, device=task_labels.device)
             else:
                 num_classes_task = aux_pred.shape[-1]
                 valid = (task_labels >= 0) & (task_labels < num_classes_task)
@@ -328,6 +332,26 @@ def get_loss(
                 aux_pred = aux_pred.squeeze(-1) if aux_pred.dim() > 1 else aux_pred
                 task_labels = task_labels.float()
                 loss_aux = torch.mean(nn.functional.mse_loss(aux_pred, task_labels, reduction="none"))
+            # For vertexing task, also apply slot mask to ignore zero-padded vertex slots
+            elif task_name == "vertex_classification" and aux_slot_masks is not None:
+                # This is tricky, here let me write out the shapes to help me out
+                # aux_pred: (Batch_size, max_tau_vertex_slots) [B, 20]
+                # task_labels: (Batch_size, ) # Basically this just stores the index of the correct vertex slot
+                # aux_slot_masks: (Batch_size, max_tau_vertex_slots) [B, 20] # Binary mask indicating which vertex slots are valid (not zero-padded)
+                slot_mask = aux_slot_masks
+                if task_mask is not None:
+                    slot_mask = slot_mask[task_mask] # First apply the sample-level mask, to align with the filtered aux_pred and task_labels
+                slot_mask = slot_mask[valid] # Then apply the valid label mask
+                row_has_valid = slot_mask.any(dim=1) # Should be redundant, but here we max sure that there is a true tau vertex for each sample in the batch
+                label_is_valid = slot_mask.gather(1, task_labels.unsqueeze(1)).squeeze(1) # In some strange world where one of the zero-padded slots is somehow chosen as the target-label (should be totally redundant and never needed) 
+                final_mask = row_has_valid & label_is_valid
+                if not final_mask.any():
+                    continue
+                aux_pred = aux_pred[final_mask]
+                task_labels = task_labels[final_mask]
+                slot_mask = slot_mask[final_mask]
+                masked_logits = aux_pred.masked_fill(~slot_mask, float("-inf"))# Mask padded slots out of softmax
+                loss_aux = torch.mean(class_cost(masked_logits, task_labels))
             else:
                 # For classification: use cross entropy
                 loss_aux = torch.mean(class_cost(aux_pred, task_labels))
