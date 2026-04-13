@@ -86,7 +86,8 @@ def collate_point_cloud(batch, max_part=5000):
     sequence_fields = ["pid", "add_info", "data_pid", "vertex_pid"]
     jet_level_fields = ["cond", "decay_mode", "tau_targets", "charged_pion_targets",
                         "neutral_pion_targets", "reco_tau_4mom", "reco_charged_pions",
-                        "reco_neutral_pions", "reco_id", "reco_decay_mode"]
+                        "reco_neutral_pions", "reco_id", "reco_decay_mode",
+                        "tau_vertex_targets", "vertex_slot_mask"]
     # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
     # cells_per_cluster shares the cluster dimension with X and must be truncated
@@ -186,7 +187,8 @@ class HEPDataset(Dataset):
         nevts=-1,
         use_tracks=False,
         use_cells=False,
-        do_regression_aux_tasks=False
+        do_regression_aux_tasks=False,
+        do_vertex_classification=False
     ):
         self.use_cond = use_cond
         self.use_pid = use_pid
@@ -197,6 +199,7 @@ class HEPDataset(Dataset):
         self.num_add = num_add
         self.label_shift = label_shift
         self.do_regression_aux_tasks = do_regression_aux_tasks
+        self.do_vertex_classification = do_vertex_classification
 
         self.file_paths = file_paths
         self._file_cache = {}
@@ -223,6 +226,9 @@ class HEPDataset(Dataset):
             keys.append("cells_per_cluster")
         if self.do_regression_aux_tasks:
             keys.extend(["tau_targets", "charged_pion_targets", "neutral_pion_targets"])
+        if self.do_vertex_classification:
+            keys.append("tau_vertex_targets")
+            keys.append("vertex_slot_mask")
         keys.extend(["decay_mode", "data_pid",
                      "reco_id", "reco_decay_mode", "reco_tau_4mom", "reco_charged_pions", "reco_neutral_pions"])
         return keys
@@ -296,6 +302,8 @@ class HEPDataset(Dataset):
         reco_tau_4mom=None,
         reco_charged_pions=None,
         reco_neutral_pions=None,
+        tau_vertex_targets=None,
+        vertex_slot_mask=None,
     ):
         sample = {}
 
@@ -360,6 +368,12 @@ class HEPDataset(Dataset):
         if reco_neutral_pions is not None:
             sample["reco_neutral_pions"] = torch.tensor(reco_neutral_pions, dtype=torch.float32)
 
+        if tau_vertex_targets is not None and self.do_vertex_classification:
+            sample["tau_vertex_targets"] = torch.tensor(tau_vertex_targets, dtype=torch.int32)
+
+        if vertex_slot_mask is not None and self.do_vertex_classification:
+            sample["vertex_slot_mask"] = torch.tensor(vertex_slot_mask, dtype=torch.bool)
+
         return sample
 
     def __getitem__(self, idx):
@@ -374,6 +388,8 @@ class HEPDataset(Dataset):
         tau_targets = f["tau_targets"][sample_idx] if self.do_regression_aux_tasks and "tau_targets" in f else None
         charged_pion_targets = f["charged_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "charged_pion_targets" in f else None
         neutral_pion_targets = f["neutral_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "neutral_pion_targets" in f else None
+        tau_vertex_targets = f["tau_vertex_targets"][sample_idx] if self.do_vertex_classification and "tau_vertex_targets" in f else None
+        vertex_slot_mask = f["vertex_slot_mask"][sample_idx] if self.do_vertex_classification and "vertex_slot_mask" in f else None
         reco_id = f["reco_id"][sample_idx] if "reco_id" in f else None
         reco_decay_mode = f["reco_decay_mode"][sample_idx] if "reco_decay_mode" in f else None
         reco_tau_4mom = f["reco_tau_4mom"][sample_idx] if "reco_tau_4mom" in f else None
@@ -396,6 +412,8 @@ class HEPDataset(Dataset):
             reco_tau_4mom=reco_tau_4mom,
             reco_charged_pions=reco_charged_pions,
             reco_neutral_pions=reco_neutral_pions,
+            tau_vertex_targets=tau_vertex_targets,
+            vertex_slot_mask=vertex_slot_mask,
         )
 
     def __getitems__(self, indices):
@@ -427,6 +445,8 @@ class HEPDataset(Dataset):
             batch_tau_targets = f["tau_targets"][sorted_indices] if "tau_targets" in f else None
             batch_charged_pion = f["charged_pion_targets"][sorted_indices] if "charged_pion_targets" in f else None
             batch_neutral_pion = f["neutral_pion_targets"][sorted_indices] if "neutral_pion_targets" in f else None
+            batch_tau_vertex = f["tau_vertex_targets"][sorted_indices] if self.do_vertex_classification and "tau_vertex_targets" in f else None
+            batch_vertex_slot_mask = f["vertex_slot_mask"][sorted_indices] if self.do_vertex_classification and "vertex_slot_mask" in f else None
             batch_reco_id = f["reco_id"][sorted_indices] if "reco_id" in f else None
             batch_reco_decay_mode = f["reco_decay_mode"][sorted_indices] if "reco_decay_mode" in f else None
             batch_reco_tau_4mom = f["reco_tau_4mom"][sorted_indices] if "reco_tau_4mom" in f else None
@@ -450,6 +470,9 @@ class HEPDataset(Dataset):
                     reco_tau_4mom=batch_reco_tau_4mom[i] if batch_reco_tau_4mom is not None else None,
                     reco_charged_pions=batch_reco_charged[i] if batch_reco_charged is not None else None,
                     reco_neutral_pions=batch_reco_neutral[i] if batch_reco_neutral is not None else None,
+                    tau_vertex_targets=batch_tau_vertex[i] if batch_tau_vertex is not None else None,
+                    vertex_slot_mask=batch_vertex_slot_mask[i] if batch_vertex_slot_mask is not None else None,
+
                 )
 
         return samples
@@ -484,6 +507,7 @@ def load_data(
     use_tracks=False,
     use_cells=False,
     do_regression_aux_tasks=False,
+    do_vertex_classification=False,
 ):
     supported_datasets = [
         "top",
@@ -603,6 +627,7 @@ def load_data(
         use_tracks=use_tracks,
         use_cells=use_cells,
         do_regression_aux_tasks=do_regression_aux_tasks,
+        do_vertex_classification=do_vertex_classification,
     )
 
     loader_kwargs = {

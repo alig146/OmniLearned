@@ -101,6 +101,7 @@ def train(
     # Learned per-cluster cell aggregation
     use_cells: bool = typer.Option(False, help="Use learned per-cluster cell aggregation"),
     cell_dim: int = typer.Option(14, help="Number of cell features"),
+    do_vertex_classification: bool = typer.Option(False, help="Add softmax vertex-slot classification task for the true tau vertex"),
 ):
     run_training(
         outdir,
@@ -155,6 +156,7 @@ def train(
         track_dim=track_dim,
         use_cells=use_cells,
         cell_dim=cell_dim,
+        do_vertex_classification=do_vertex_classification,
     )
 
 
@@ -275,6 +277,7 @@ def evaluate(
     # Learned per-cluster cell aggregation
     use_cells: bool = typer.Option(False, help="Use learned per-cluster cell aggregation"),
     cell_dim: int = typer.Option(14, help="Number of cell features"),
+    do_vertex_classification: bool = typer.Option(False, help="Add softmax vertex-slot classification task for the true tau vertex"),
 ):
     run_evaluation(
         indir,
@@ -308,6 +311,7 @@ def evaluate(
         track_dim=track_dim,
         use_cells=use_cells,
         cell_dim=cell_dim,
+        do_vertex_classification=do_vertex_classification,
     )
 
 
