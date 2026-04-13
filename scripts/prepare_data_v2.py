@@ -38,6 +38,7 @@ import shutil
 MAX_CLUSTERS = 20
 MAX_TRACKS = 20
 MAX_CELLS_PER_CLUSTER = 20
+MAX_VERTICES_PER_TAU = 20
 
 # Cluster branches (particles in point cloud)
 # First 4 MUST be: [dEta, dPhi, log(pT), log(E)]
@@ -95,21 +96,21 @@ CELL_BRANCHES = [
 ]
 
 TAU_REGRESSION_TARGETS = [
-    ("truth_pt", "truth_pt", False), 
-    ("truth_eta", "truth_eta", False),
-    ("truth_phi", "truth_phi", False),
+    ("truth_pt", "truth_tau_Vispt", False), 
+    ("truth_eta", "truth_tau_Viseta", False),
+    ("truth_phi", "truth_tau_Visphi", False),
 ]
 
 MAX_PION_REGRESSION_TARGETS = 4
 CHARGED_PION_BRANCHES = [
-    ("truth_chargedPion_pt",  "truth_chargedPion_pt",  False),
-    ("truth_chargedPion_eta", "truth_chargedPion_eta", False),
-    ("truth_chargedPion_phi", "truth_chargedPion_phi", False),
+    ("truth_chargedPion_pt",  "truth_chargedPion_Vispt",  False),
+    ("truth_chargedPion_eta", "truth_chargedPion_Viseta", False),
+    ("truth_chargedPion_phi", "truth_chargedPion_Visphi", False),
 ]
 NEUTRAL_PION_BRANCHES = [
-    ("truth_neutralPion_pt",  "truth_neutralPion_pt",  False),
-    ("truth_neutralPion_eta", "truth_neutralPion_eta", False),
-    ("truth_neutralPion_phi", "truth_neutralPion_phi", False),
+    ("truth_neutralPion_pt",  "truth_neutralPion_Vispt",  False),
+    ("truth_neutralPion_eta", "truth_neutralPion_Viseta", False),
+    ("truth_neutralPion_phi", "truth_neutralPion_Visphi", False),
 ]
 PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
@@ -117,6 +118,9 @@ TAUTRACK_CLASSIFICATION_BRANCHES = [
     ("trk_truthType", "trk_truthType", False), # Could be trk_originClass (need to double-check) # 0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT
 ]
 
+TAUVERTEX_CLASSIFICATION_BRANCHES = [
+    ("truth_tauVertex", "truth_tauVertex", False)
+]
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
 NUM_TRACK_FEATURES = len(TRACK_BRANCHES)
@@ -124,7 +128,7 @@ NUM_CELL_FEATURES = len(CELL_BRANCHES)
 NUM_TAU_REGRESSION_TARGETS = len(TAU_REGRESSION_TARGETS)
 NUM_PION_FEATURES = 3  # pt, eta, phi
 NUM_TAU_TRACK_CLASSIFICATION_TARGETS = len(TAUTRACK_CLASSIFICATION_BRANCHES)
-
+NUM_TAU_VERTEX_CLASSIFICATION_TARGETS = len(TAUVERTEX_CLASSIFICATION_BRANCHES)
 
 OTHER_BRANCHES = [
     "truth_decayMode", # 0=1p0n, 1=1p1n, 2=1pXn, 3=3p0n, 4=3pXn, 5=Other, 6=NotSet, 7=Error
@@ -137,6 +141,7 @@ def get_all_branches(label=None):
     if label == 1:
         branches += [b for _, b, _ in CELL_BRANCHES] # Only attempt to read cell branches for tau events (label 1)
         branches += [b for _, b, _ in TAUTRACK_CLASSIFICATION_BRANCHES] # Only needs to read tau track classification branches for tau events (label 1)
+        branches += [b for _, b, _ in TAUVERTEX_CLASSIFICATION_BRANCHES] # Only needs to read tau vertex classification branches for tau events (label 1)
 
     branches += [b for _, b, _ in CLUSTER_BRANCHES]
     branches += [b for _, b, _ in TRACK_BRANCHES]
@@ -260,7 +265,8 @@ def _process_chunk(events, label, n_events_in_chunk):
 
     # Tau regression targets — one scalar set per jet
     chunk_tau_targets = _vectorized_scalar_targets(events, TAU_REGRESSION_TARGETS)
-
+    # Tau vertices targets - vector of vertices per jet, only for tau jets, else None to avoid large zero arrays
+    chunk_tau_vertex_targets = _vectorized_point_cloud(events, TAUVERTEX_CLASSIFICATION_BRANCHES, MAX_VERTICES_PER_TAU) if label == 1 else None 
     # Pion regression targets — ragged lists padded to MAX_PION_REGRESSION_TARGETS
     chunk_charged_pion_targets = _vectorized_point_cloud(
         events, CHARGED_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
@@ -268,11 +274,10 @@ def _process_chunk(events, label, n_events_in_chunk):
         events, NEUTRAL_PION_BRANCHES, MAX_PION_REGRESSION_TARGETS)
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
-    ### TO-DO ONGOING EDITS HERE
     chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
-            chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets, chunk_tau_track_targets)
+            chunk_tau_targets, chunk_tau_vertex_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets, chunk_tau_track_targets)
 
 
 def process_file(filepath, label, chunk_size="250 MB"):
@@ -326,9 +331,10 @@ def process_file(filepath, label, chunk_size="250 MB"):
     all_pid = np.concatenate([r[3] for r in chunk_results], axis=0)
     all_decay_mode = np.concatenate([r[4] for r in chunk_results], axis=0)
     all_tau_targets = np.concatenate([r[5] for r in chunk_results], axis=0)
-    all_charged_pion_targets = np.concatenate([r[6] for r in chunk_results], axis=0)
-    all_neutral_pion_targets = np.concatenate([r[7] for r in chunk_results], axis=0)
-    all_tau_track_targets = np.concatenate([r[8] for r in chunk_results], axis=0) if label == 1 else None
+    all_tau_vertex_targets = np.concatenate([r[6] for r in chunk_results], axis=0) if label == 1 else None
+    all_charged_pion_targets = np.concatenate([r[7] for r in chunk_results], axis=0)
+    all_neutral_pion_targets = np.concatenate([r[8] for r in chunk_results], axis=0)
+    all_tau_track_targets = np.concatenate([r[9] for r in chunk_results], axis=0) if label == 1 else None
     del chunk_results
 
     cell_shape_msg = all_cells_pc.shape if all_cells_pc is not None else f"({len(all_data)}, {MAX_CLUSTERS}, {MAX_CELLS_PER_CLUSTER}, {NUM_CELL_FEATURES}) [zero-filled on write]"
@@ -336,9 +342,10 @@ def process_file(filepath, label, chunk_size="250 MB"):
           f"cells_pc={cell_shape_msg}, tau_targets={all_tau_targets.shape}, "
           f"charged_pion_targets={all_charged_pion_targets.shape}, "
           f"neutral_pion_targets={all_neutral_pion_targets.shape},"
-          f"tau_track_targets={all_tau_track_targets.shape if all_tau_track_targets is not None else 'N/A'}")
+          f"tau_track_targets={all_tau_track_targets.shape if all_tau_track_targets is not None else 'N/A'},"
+          f"tau_vertex_targets={all_tau_vertex_targets.shape if all_tau_vertex_targets is not None else 'N/A'}")
     return (all_data, all_tracks, all_cells_pc, all_pid, all_decay_mode,
-            all_tau_targets, all_charged_pion_targets, all_neutral_pion_targets, all_tau_track_targets)
+            all_tau_targets, all_tau_vertex_targets, all_charged_pion_targets, all_neutral_pion_targets, all_tau_track_targets)
 
 
 def _process_file_to_staging(args):
@@ -350,7 +357,7 @@ def _process_file_to_staging(args):
         raise RuntimeError(f"Error processing {filepath}: {e}") from e
     if result is None or result[0] is None:
         return None, 0
-    data, tracks, cells_pc, pid, decay_mode, tau_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = result
+    data, tracks, cells_pc, pid, decay_mode, tau_targets, tau_vertex_targets, charged_pion_targets, neutral_pion_targets, tau_track_targets = result
     n_jets = len(data)
     staging_path = os.path.join(staging_dir, f"staging_{file_idx:05d}.h5")
     with h5py.File(staging_path, "w") as hf:
@@ -371,6 +378,16 @@ def _process_file_to_staging(args):
         hf.create_dataset("tau_targets", data=tau_targets, compression="gzip")
         hf.create_dataset("charged_pion_targets", data=charged_pion_targets, compression="gzip")
         hf.create_dataset("neutral_pion_targets", data=neutral_pion_targets, compression="gzip")
+        if tau_vertex_targets is not None:
+            hf.create_dataset("tau_vertex_targets", data=tau_vertex_targets, compression="gzip")
+        else:
+            hf.create_dataset(
+                "tau_vertex_targets",
+                shape=(n_jets, MAX_VERTICES_PER_TAU, NUM_TAU_VERTEX_CLASSIFICATION_TARGETS),
+                dtype=np.int32,
+                compression="gzip",
+                fillvalue=0,
+            )
         if tau_track_targets is not None:
             hf.create_dataset("tau_track_targets", data=tau_track_targets, compression="gzip")
         else:
@@ -471,6 +488,13 @@ def main():
                     dtype=np.float32,
                     compression="gzip",
                 )
+                h5.create_dataset(
+                    "tau_vertex_targets",
+                    shape=(0, MAX_VERTICES_PER_TAU, NUM_TAU_VERTEX_CLASSIFICATION_TARGETS),
+                    maxshape=(None, MAX_VERTICES_PER_TAU, NUM_TAU_VERTEX_CLASSIFICATION_TARGETS),
+                    dtype=np.int32,
+                    compression="gzip",
+                )
                 hf.create_dataset(
                     "charged_pion_targets",
                     shape=(0, MAX_PION_REGRESSION_TARGETS, NUM_PION_FEATURES),
@@ -510,6 +534,16 @@ def main():
                 hf.create_dataset("tau_targets", data=tau_targets, compression="gzip")
                 hf.create_dataset("charged_pion_targets", data=charged_pion_targets, compression="gzip")
                 hf.create_dataset("neutral_pion_targets", data=neutral_pion_targets, compression="gzip")
+                if tau_vertex_targets is not None:
+                    hf.create_dataset("tau_vertex_targets", data=tau_vertex_targets, compression="gzip")
+                else:
+                    hf.create_dataset(
+                        "tau_vertex_targets",
+                        shape=(len(data), MAX_VERTICES_PER_TAU, NUM_TAU_VERTEX_CLASSIFICATION_TARGETS),
+                        dtype=np.int32,
+                        compression="gzip",
+                        fillvalue=0,
+                    )
                 if tau_track_targets is not None:
                     hf.create_dataset("tau_track_targets", data=tau_track_targets, compression="gzip")
                 else:
@@ -526,14 +560,14 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_03_23_26_Prod1_EXT0"
-    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_03_23_26_Prod1_EXT0"
-    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_03_23_26_Prod1_EXT0"
-    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_03_23_26_Prod1_EXT0"
-    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_03_23_26_Prod1_EXT0"
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_10_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_10_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_10_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_10_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_10_26_Prod1_EXT0"
 
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_03_23_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_03_23_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_10_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_10_26_Prod1_EXT0"
 
 
     jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name))
@@ -667,6 +701,7 @@ def main():
                 pid = sf["pid"][:]
                 decay_mode = sf["decay_mode"][:]
                 tau_targets = sf["tau_targets"][:]
+                tau_vertex_targets = sf["tau_vertex_targets"][:]
                 charged_pion_targets = sf["charged_pion_targets"][:]
                 neutral_pion_targets = sf["neutral_pion_targets"][:]
                 tau_track_targets = sf["tau_track_targets"][:] 
@@ -674,7 +709,7 @@ def main():
             if sample_shapes is None:
                 sample_shapes = (
                     data.shape[1:], tracks.shape[1:], cells_pc.shape[1:],
-                    tau_targets.shape[1:], charged_pion_targets.shape[1:],
+                    tau_targets.shape[1:], tau_vertex_targets.shape[1:], charged_pion_targets.shape[1:],
                     neutral_pion_targets.shape[1:], tau_track_targets.shape[1:]
                 )
 
@@ -693,6 +728,7 @@ def main():
                 p = pid[mask]
                 dm = decay_mode[mask]
                 tt = tau_targets[mask]
+                tvt = tau_vertex_targets[mask]
                 cpt = charged_pion_targets[mask]
                 npt = neutral_pion_targets[mask]
                 ttt = tau_track_targets[mask]
@@ -705,6 +741,7 @@ def main():
                     h5_handles[split_name].create_dataset("pid", data=p, maxshape=(None,))
                     h5_handles[split_name].create_dataset("decay_mode", data=dm, maxshape=(None,))
                     h5_handles[split_name].create_dataset("tau_targets", data=tt, compression="gzip", maxshape=(None,) + tt.shape[1:])
+                    h5_handles[split_name].create_dataset("tau_vertex_targets", data=tvt, compression="gzip", maxshape=(None,) + tvt.shape[1:])
                     h5_handles[split_name].create_dataset("charged_pion_targets", data=cpt, compression="gzip", maxshape=(None,) + cpt.shape[1:])
                     h5_handles[split_name].create_dataset("neutral_pion_targets", data=npt, compression="gzip", maxshape=(None,) + npt.shape[1:])
                     h5_handles[split_name].create_dataset("tau_track_targets", data=ttt, compression="gzip", maxshape=(None,) + ttt.shape[1:])
@@ -714,7 +751,7 @@ def main():
                     for ds_name, arr in [
                         ("data", d), ("tracks", t), ("cells_per_cluster", cpc),
                         ("pid", p), ("decay_mode", dm),
-                        ("tau_targets", tt),
+                        ("tau_targets", tt), ("tau_vertex_targets", tvt),
                         ("charged_pion_targets", cpt), ("neutral_pion_targets", npt),
                         ("tau_track_targets", ttt)
                     ]:
@@ -727,7 +764,7 @@ def main():
 
     # Create empty HDF5 for splits that received no data (dataloader expects all splits to exist)
     if sample_shapes is not None:
-        cluster_shp, track_shp, cell_pc_shp, tau_shp, cpt_shp, npt_shp, ttt_shp = sample_shapes
+        cluster_shp, track_shp, cell_pc_shp, tau_shp, tvt_shp, cpt_shp, npt_shp, ttt_shp = sample_shapes
         for split_name in split_paths:
             if split_name not in h5_handles:
                 with h5py.File(split_files[split_name], "w") as hf:
@@ -737,6 +774,7 @@ def main():
                     hf.create_dataset("pid", shape=(0,), maxshape=(None,), dtype=np.int32)
                     hf.create_dataset("decay_mode", shape=(0,), maxshape=(None,), dtype=np.int32)
                     hf.create_dataset("tau_targets", shape=(0,) + tau_shp, maxshape=(None,) + tau_shp, dtype=np.float32, compression="gzip")
+                    hf.create_dataset("tau_vertex_targets", shape=(0,) + tvt_shp, maxshape=(None,) + tvt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("charged_pion_targets", shape=(0,) + cpt_shp, maxshape=(None,) + cpt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("neutral_pion_targets", shape=(0,) + npt_shp, maxshape=(None,) + npt_shp, dtype=np.float32, compression="gzip")
                     hf.create_dataset("tau_track_targets", shape=(0,) + ttt_shp, maxshape=(None,) + ttt_shp, dtype=np.float32, compression="gzip")
@@ -791,6 +829,7 @@ def main():
         dshape, tshape = f["data"].shape, f["tracks"].shape
         cpc_shape = f["cells_per_cluster"].shape
         tau_shape = f["tau_targets"].shape
+        tvt_shape = f["tau_vertex_targets"].shape
         cpt_shape = f["charged_pion_targets"].shape
         npt_shape = f["neutral_pion_targets"].shape
         ttt_shape = f["tau_track_targets"].shape
@@ -804,6 +843,8 @@ def main():
     print(f"    - {MAX_CLUSTERS} clusters x {MAX_CELLS_PER_CLUSTER} cells x {NUM_CELL_FEATURES} features")
     print(f"\n  tau_targets: (N, {tau_shape[1]})")
     print(f"    - {NUM_TAU_REGRESSION_TARGETS} scalar targets per jet: truth_pt, truth_eta, truth_phi")
+    print(f"\n  tau_vertex_targets: (N, {tvt_shape[1]}, {tvt_shape[2]})")
+    print(f"    - up to {MAX_VERTICES_PER_TAU} vertices x {NUM_TAU_VERTEX_CLASSIFICATION_TARGETS} features (tau_vertex_class), 0-padded")
     print(f"\n  charged_pion_targets: (N, {cpt_shape[1]}, {cpt_shape[2]})")
     print(f"    - up to {MAX_PION_REGRESSION_TARGETS} charged pions x {NUM_PION_FEATURES} features (pt, eta, phi), 0-padded")
     print(f"\n  neutral_pion_targets: (N, {npt_shape[1]}, {npt_shape[2]})")
