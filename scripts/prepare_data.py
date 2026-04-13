@@ -362,7 +362,7 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     chunk_neutral_pion_targets[no_neutral, :n_neutral_idx] = -999.0
     
     # Tau vertices targets - vector of vertices per jet, only for tau jets, else None to avoid large zero arrays
-    chunk_tau_vertex_targets = _vectorized_point_cloud(events, TAUVERTEX_CLASSIFICATION_BRANCHES, MAX_VERTICES_PER_TAU) if label == 1 else None
+    chunk_tau_vertex_targets = _vectorized_point_cloud(events, TAUVERTEX_CLASSIFICATION_BRANCHES, MAX_VERTICES_PER_TAU).astype(np.int32) if label == 1 else None
     chunk_num_vertices = ak.to_numpy(ak.num(events["truth_tauVertex"], axis=1)).astype(np.int32) if label == 1 else None
     chunk_vertex_slot_mask = ( np.arange(MAX_VERTICES_PER_TAU)[None, :] < chunk_num_vertices[:, None] ).astype(np.bool_) if label == 1 else None # [N, MAX_VERTICES_PER_TAU] False for 0-padded vertex slots
     # Reco comparisons
