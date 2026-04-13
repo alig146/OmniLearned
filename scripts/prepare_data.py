@@ -18,6 +18,7 @@ Usage:
     python prepare_data.py --input_dir /path/to/root/files --output_dir /path/to/output
 """
 
+from cProfile import label
 import os
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
@@ -118,7 +119,7 @@ PION_REGRESSION_TARGETS = CHARGED_PION_BRANCHES + NEUTRAL_PION_BRANCHES
 
 TAUTRACK_CLASSIFICATION_BRANCHES = [
     ("trk_truthType", "trk_truthType", False), # Could be trk_originClass (need to double-check) # 0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT
-]
+] # I will redefine the labels we feed into OMNI via the following # 0,8=Undefined; 1 = TTT; 2 = CT, 3,4 = IT (balled as 3), 5,6,7 = FT (balled as 4) 
 
 TAUVERTEX_CLASSIFICATION_BRANCHES = [
     ("truth_tauVertex", "truth_tauVertex", False)
@@ -375,7 +376,7 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
     # TODO: ongoing edits
-    chunk_tau_track_targets = _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS) if label == 1 else None
+    chunk_tau_track_targets =  _vectorized_point_cloud(events, TAUTRACK_CLASSIFICATION_BRANCHES, MAX_TRACKS).astype(np.int32) if label == 1 else None
 
     return (chunk_data, chunk_tracks, chunk_cells_pc, chunk_pid, chunk_decay_mode,
             chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets,
