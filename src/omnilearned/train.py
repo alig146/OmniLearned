@@ -41,6 +41,21 @@ def get_logs(device):
     logs["loss_class_event"] = logs_buff[4].view(-1)
     return logs
 
+def map_tau_track_targets(raw_targets):
+    """Map raw origin labels to 4 classes: TTT, CT, IT, FT; invalid -> -1.
+    Raw labels are expected as:
+    0,8=Undefined, 1=TTT, 2=CT, 3,4=IT, 5,6,7=FT.
+    """
+    targets = raw_targets.long()  # (B, T) or (B, T, 1)
+    if targets.dim() == 3 and targets.shape[-1] == 1:
+        targets = targets[..., 0]  # (B, T)
+
+    mapped = torch.full_like(targets, -1)  # (B, T), default invalid
+    mapped[targets == 1] = 0  # TTT
+    mapped[targets == 2] = 1  # CT
+    mapped[(targets == 3) | (targets == 4)] = 2  # IT
+    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3  # FT
+    return mapped  # (B, T)
 
 def train_step(
     model,
@@ -141,6 +156,12 @@ def train_step(
             aux_masks["tau_eta"] = tau_mask
             aux_labels["tau_phi"] = tau_targets[:, 2]
             aux_masks["tau_phi"] = tau_mask
+
+        # Tau Track Classification Labels (1 = TTT, 2 = CT, 3,4 = IT, 5,6,7 = FT, 0,8 = Undefined) # Already remapped
+        if batch.get("tau_track_targets") is not None:
+            raw_track_targets = batch["tau_track_targets"].to(device)
+            aux_labels["tautrack_class"] = map_tau_track_targets(raw_track_targets)
+            aux_masks["tautrack_class"] = ( (y[:, None] == 1) & (aux_labels["tautrack_class"] >= 0) )
 
         if batch.get("charged_pion_targets") is not None:
             cpt = batch["charged_pion_targets"].to(device)  # (batch, 3)
@@ -291,14 +312,23 @@ def val_step(
 
         if batch.get("decay_mode") is not None:
             aux_labels["decay_mode"] = batch["decay_mode"].to(device)
-            aux_masks["decay_mode"] = (y == 1)  # Only taus
-        
+            #aux_masks["decay_mode"] = (y == 1)  # Only taus
+            #Isn't this better instead @Ali, @Miles?
+            aux_masks["decay_mode"] = ((y == 1) # only taus and those with valid decay modes
+                & (aux_labels["decay_mode"] != 5) & (aux_labels["decay_mode"] != 6))
+
         # Electron vs QCD: derived from pid
         aux_tasks = (model.module.aux_tasks if hasattr(model, 'module') else model.aux_tasks) or []
         if "electron_vs_qcd" in [t["name"] for t in aux_tasks]:
             aux_masks["electron_vs_qcd"] = (y == 0) | (y == 2)  # QCD and electron only
             aux_labels["electron_vs_qcd"] = (y == 2).long()     # electron=1, QCD=0
-        
+
+        # Tau Track Classification Labels (1 = TTT, 2 = CT, 3,4 = IT, 5,6,7 = FT, 0,8 = Undefined) # Simplify this for next prepare_data_v2.py iteration (for now just consider 1,2,3,4 as valid and mask the rest)
+        if batch.get("tau_track_targets") is not None:
+            raw_track_targets = batch["tau_track_targets"].to(device)
+            aux_labels["tautrack_class"] = map_tau_track_targets(raw_track_targets)
+            aux_masks["tautrack_class"] = ( (y[:, None] == 1) & (aux_labels["tautrack_class"] >= 0) )
+
         # Truth-tau regression tasks — use log(pt) (index 0) to normalize MeV scale
         if batch.get("tau_targets") is not None:
             tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)

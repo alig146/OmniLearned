@@ -33,7 +33,7 @@ def eval_model(
     rank=0,
     aux_regression_tasks=None,
 ):
-    prediction, cond, labels, aux_preds, decay_modes, regression_truth, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions = test_step(  # noqa: E501
+    prediction, cond, labels, aux_preds, decay_modes, tau_track_targets, regression_truth, reco_id, reco_decay_mode, reco_tau_4mom, reco_charged_pions, reco_neutral_pions = test_step(  # noqa: E501
         model, test_loader, mode, device
     )
 
@@ -72,6 +72,10 @@ def eval_model(
             # Add decay_mode true labels if available
             if decay_modes is not None:
                 save_dict["decay_mode"] = decay_modes.cpu().numpy()
+
+            # Add tau-track classification labels if available
+            if tau_track_targets is not None:
+                save_dict["tau_track_targets"] = tau_track_targets.cpu().numpy()
 
             # Add reco ID for event matching
             if reco_id is not None:
@@ -114,6 +118,7 @@ def test_step(
     conds = []
     aux_preds_all = {}  # Collect auxiliary predictions
     decay_modes = []    # Collect true decay mode labels
+    tau_track_targets = []  # Collect true tau track classification labels
     regression_truth_all = {}  # Collect regression truth labels
     reco_id_all = []
     reco_decay_mode_all = []
@@ -164,7 +169,11 @@ def test_step(
         # Collect true decay mode labels if available
         if batch.get("decay_mode") is not None:
             decay_modes.append(batch["decay_mode"].to(device))
-        
+
+        # Collect tau track classification labels if available
+        if batch.get("tau_track_targets") is not None:
+            tau_track_targets.append(batch["tau_track_targets"].to(device))
+
         # Collect regression truth labels — log(pt), consistent with training target
         if batch.get("tau_targets") is not None:
             tau_targets = batch["tau_targets"].to(device)  # Shape: (batch, 3)
@@ -218,7 +227,10 @@ def test_step(
     
     # Concatenate decay modes if collected
     decay_modes_concat = torch.cat(decay_modes).to(device) if decay_modes else None
-    
+
+    # Concatenate tau track classification labels if collected
+    tau_track_targets_concat = torch.cat(tau_track_targets).to(device) if tau_track_targets else None
+
     # Concatenate regression truth labels
     regression_truth_concat = {}
     for task_name, task_truths in regression_truth_all.items():
@@ -240,6 +252,7 @@ def test_step(
         torch.cat(labels).to(device),
         aux_preds_concat,
         decay_modes_concat,
+        tau_track_targets_concat,
         regression_truth_concat,
         reco_id_concat,
         reco_decay_mode_concat,

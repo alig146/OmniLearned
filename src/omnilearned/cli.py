@@ -92,9 +92,8 @@ def train(
     mlp_drop: float = typer.Option(0.0, help="Dropout for mlp layers"),
     feature_drop: float = typer.Option(0.0, help="Dropout for input features"),
     num_workers: int = typer.Option(16, help="Number of workers for data loading"),
-    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2'"),
-    aux_regression_tasks_str: str = typer.Option("", 
-                        help="Auxiliary regression tasks (subset of aux_tasks): 'tes'"),
+    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2',tautrack_class:4"),
+    aux_regression_tasks_str: str = typer.Option("", help="Auxiliary regression tasks (subset of aux_tasks): 'tes'"),
     # Option B: Tracks as separate tokens
     use_tracks: bool = typer.Option(False, help="Use tracks as separate tokens (Option B)"),
     track_dim: int = typer.Option(24, help="Number of track features"),
@@ -192,6 +191,7 @@ def train_hl(
     # Model
     mlp_drop: float = typer.Option(0.0, help="Dropout for mlp layers"),
     num_workers: int = typer.Option(16, help="Number of workers for data loading"),
+    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:7,electron_vs_qcd:2,tautrack_class:4'"),
 ):
     run_training_hl(
         outdir,

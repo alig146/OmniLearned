@@ -300,17 +300,17 @@ def get_loss(
             if task_name not in aux_labels or aux_labels[task_name] is None:
                 continue
 
-            task_labels = aux_labels[task_name]
+            task_labels = aux_labels[task_name] # (B,) or (B, T)
             task_weight = aux_weights.get(task_name, 1.0) # TODO: effect of changing this?!
-            task_mask = aux_masks.get(task_name, None)
+            task_mask = aux_masks.get(task_name, None) # (B,) or (B, T)
             task_type = task_type_map.get(task_name, "classification")
 
             # Apply mask if provided (e.g., decay_mode only for tau samples)
             if task_mask is not None:
                 if not task_mask.any():
                     continue
-                aux_pred = aux_pred[task_mask]
-                task_labels = task_labels[task_mask]
+                aux_pred = aux_pred[task_mask]  # (N_valid, C_task) or (N_valid, T, C_task)
+                task_labels = task_labels[task_mask] # (N_valid,) or (N_valid, T)
 
             # Filter out invalid labels; skip integer-range check for regression tasks
             if task_type == "regression":
@@ -353,6 +353,9 @@ def get_loss(
                 masked_logits = aux_pred.masked_fill(~slot_mask, float("-inf"))# Mask padded slots out of softmax
                 loss_aux = torch.mean(class_cost(masked_logits, task_labels))
             else:
+                if aux_pred.dim() > 2: # TO-DO need to double-check this
+                    aux_pred = aux_pred.reshape(-1, aux_pred.shape[-1])  # (N_flat, C_task)
+                    task_labels = task_labels.reshape(-1)  # (N_flat,)
                 # For classification: use cross entropy
                 loss_aux = torch.mean(class_cost(aux_pred, task_labels))
             
