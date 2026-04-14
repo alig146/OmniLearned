@@ -90,6 +90,7 @@ def collate_point_cloud(batch, max_part=5000):
                         "tau_vertex_targets", "vertex_slot_mask"]
     # Tracks are appended as separate tokens, so no cluster-dim truncation needed
     point_cloud_fields = ["tracks"]
+    tau_track_target_fields = ["tau_track_targets"]
     # cells_per_cluster shares the cluster dimension with X and must be truncated
     cluster_aligned_fields = ["cells_per_cluster"]
 
@@ -109,6 +110,13 @@ def collate_point_cloud(batch, max_part=5000):
             result[field] = None
 
     for field in point_cloud_fields:
+        if all(field in item for item in batch):
+            stacked = torch.stack([item[field] for item in batch])
+            result[field] = stacked
+        else:
+            result[field] = None
+
+    for field in tau_track_target_fields:
         if all(field in item for item in batch):
             stacked = torch.stack([item[field] for item in batch])
             result[field] = stacked
@@ -229,6 +237,8 @@ class HEPDataset(Dataset):
         if self.do_vertex_classification:
             keys.append("tau_vertex_targets")
             keys.append("vertex_slot_mask")
+        if self.use_tracks:
+            keys.extend(["tau_track_targets"])
         keys.extend(["decay_mode", "data_pid",
                      "reco_id", "reco_decay_mode", "reco_tau_4mom", "reco_charged_pions", "reco_neutral_pions"])
         return keys
@@ -293,6 +303,7 @@ class HEPDataset(Dataset):
         data_pid=None,
         decay_mode=None,
         tracks=None,
+        tau_track_targets=None,
         cells_per_cluster=None,
         tau_targets=None,
         charged_pion_targets=None,
@@ -344,6 +355,9 @@ class HEPDataset(Dataset):
         if tracks is not None and self.use_tracks:
             sample["tracks"] = torch.tensor(tracks, dtype=torch.float32)
 
+        if tracks is not None and self.use_tracks and tau_track_targets is not None:
+            sample["tau_track_targets"] = torch.tensor(tau_track_targets, dtype=torch.int64)
+
         if cells_per_cluster is not None and self.use_cells:
             sample["cells_per_cluster"] = torch.tensor(cells_per_cluster, dtype=torch.float32)
             
@@ -384,6 +398,7 @@ class HEPDataset(Dataset):
         data_pid = f["data_pid"][sample_idx] if self.mode in ["segmentation", "ftag"] else None
         decay_mode = f["decay_mode"][sample_idx] if "decay_mode" in f else None
         tracks = f["tracks"][sample_idx] if self.use_tracks and "tracks" in f else None
+        tau_track_targets = f["tau_track_targets"][sample_idx] if self.use_tracks and "tau_track_targets" in f else None
         cells = f["cells_per_cluster"][sample_idx] if self.use_cells and "cells_per_cluster" in f else None
         tau_targets = f["tau_targets"][sample_idx] if self.do_regression_aux_tasks and "tau_targets" in f else None
         charged_pion_targets = f["charged_pion_targets"][sample_idx] if self.do_regression_aux_tasks and "charged_pion_targets" in f else None
@@ -403,6 +418,7 @@ class HEPDataset(Dataset):
             data_pid=data_pid,
             decay_mode=decay_mode,
             tracks=tracks,
+            tau_track_targets=tau_track_targets,
             cells_per_cluster=cells,
             tau_targets=tau_targets,
             charged_pion_targets=charged_pion_targets,
@@ -441,6 +457,7 @@ class HEPDataset(Dataset):
             batch_data_pid = f["data_pid"][sorted_indices] if self.mode in ["segmentation", "ftag"] else None
             batch_decay = f["decay_mode"][sorted_indices] if "decay_mode" in f else None
             batch_tracks = f["tracks"][sorted_indices] if self.use_tracks and "tracks" in f else None
+            batch_tau_track_targets = f["tau_track_targets"][sorted_indices] if self.use_tracks and "tau_track_targets" in f else None
             batch_cells = f["cells_per_cluster"][sorted_indices] if self.use_cells and "cells_per_cluster" in f else None
             batch_tau_targets = f["tau_targets"][sorted_indices] if "tau_targets" in f else None
             batch_charged_pion = f["charged_pion_targets"][sorted_indices] if "charged_pion_targets" in f else None
@@ -461,6 +478,7 @@ class HEPDataset(Dataset):
                     data_pid=batch_data_pid[i] if batch_data_pid is not None else None,
                     decay_mode=batch_decay[i] if batch_decay is not None else None,
                     tracks=batch_tracks[i] if batch_tracks is not None else None,
+                    tau_track_targets=batch_tau_track_targets[i] if batch_tau_track_targets is not None else None,
                     cells_per_cluster=batch_cells[i] if batch_cells is not None else None,
                     tau_targets=batch_tau_targets[i] if batch_tau_targets is not None else None,
                     charged_pion_targets=batch_charged_pion[i] if batch_charged_pion is not None else None,
