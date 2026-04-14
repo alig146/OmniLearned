@@ -267,7 +267,7 @@ def evaluate(
         False, help="Clip input dataset to be within R=0.8 and atl least 500 MeV"
     ),
     num_workers: int = typer.Option(16, help="Number of workers for data loading"),
-    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2'"),
+    aux_tasks_str: str = typer.Option("", help="Auxiliary tasks: 'decay_mode:2,electron_vs_qcd:2,tautrack_class:4'"),
     aux_regression_tasks_str: str = typer.Option("", 
                     help="Auxiliary regression tasks (subset of aux_tasks): 'tes'"),
     

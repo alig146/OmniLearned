@@ -21,6 +21,20 @@ from tqdm.auto import tqdm
 # torch.manual_seed(seed_value)
 
 
+def map_tau_track_targets(raw_targets: torch.Tensor) -> torch.Tensor:
+    """Map raw origin labels to 4 classes: TTT, CT, IT, FT; invalid -> -1."""
+    targets = raw_targets.long()
+    if targets.dim() == 3 and targets.shape[-1] == 1:
+        targets = targets[..., 0]
+
+    mapped = torch.full_like(targets, -1)
+    mapped[targets == 1] = 0  # TTT
+    mapped[targets == 2] = 1  # CT
+    mapped[(targets == 3) | (targets == 4)] = 2  # IT
+    mapped[(targets == 5) | (targets == 6) | (targets == 7)] = 3  # FT
+    return mapped
+
+
 def eval_model(
     model,
     test_loader,
@@ -75,7 +89,20 @@ def eval_model(
 
             # Add tau-track classification labels if available
             if tau_track_targets is not None:
-                save_dict["tau_track_targets"] = tau_track_targets.cpu().numpy()
+                raw_tau_track_targets = tau_track_targets.cpu().numpy()
+                mapped_tau_track_targets = map_tau_track_targets(tau_track_targets)
+                tau_track_valid_mask = ((labels[:, None] == 1) & (mapped_tau_track_targets >= 0))
+
+                save_dict["tau_track_targets"] = raw_tau_track_targets # Raw track truth targets as produced from prepare_data.py (N_events, N_tracks)
+                save_dict["mapped_tau_track_targets"] = mapped_tau_track_targets.cpu().numpy()  # Remappped track truth to 4 classes + invalid (N_events, N_tracks)
+                save_dict["tau_track_valid_mask"] = tau_track_valid_mask.cpu().numpy() # Boolean mask if that track is valid or not (N_events, N_tracks)
+
+                # Save flattened per-valid-track vectors for direct evaluation.
+                if "tautrack_class" in aux_preds:
+                    tau_track_pred = aux_preds["tautrack_class"].softmax(-1).cpu().numpy()
+                    tau_track_valid_mask_np = tau_track_valid_mask.cpu().numpy().astype(bool)
+                    save_dict["tau_track_pred_valid"] = tau_track_pred[tau_track_valid_mask_np] # Predicted tau track class vector for only the valid tracks (N_valid, 4)
+                    save_dict["tau_track_true_valid"] = (mapped_tau_track_targets.cpu().numpy()[tau_track_valid_mask_np]) # Tau track truth class vector for only the valid tracks (N_valid,) with values 0-3 corresponding to TTT, CT, IT, FT
 
             # Add reco ID for event matching
             if reco_id is not None:
