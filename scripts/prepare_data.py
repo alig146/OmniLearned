@@ -157,10 +157,10 @@ RECO_CHARGED_PION_4MOM = [
     "tau_nChargedTracks" # use to split
 ]
 RECO_NEUTRAL_PION_4MOM = [
-    "reco_PanTauPi0_Vispt",
-    "reco_PanTauPi0_Viseta",
-    "reco_PanTauPi0_Visphi",
-    "reco_PanTauPi0_n" # use to split
+    "reco_CorrPanTauPi0_neutralPion_Vispt",
+    "reco_CorrPanTauPi0_neutralPion_Viseta",
+    "reco_CorrPanTauPi0_neutralPion_Visphi",
+    "reco_PanTauPi0_neutralPion_n" # use to split
 ]
 
 RECO_TAU_4MOM = [
@@ -840,14 +840,14 @@ if __name__ == "__main__":
     # Setup input data
     os.makedirs(args.output_dir, exist_ok=True)
 
-    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_04_10_26_Prod1_EXT0"
-    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_04_10_26_Prod1_EXT0"
-    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_04_10_26_Prod1_EXT0"
-    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_04_10_26_Prod1_EXT0"
-    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_04_10_26_Prod1_EXT0"
+    jz0_rucio_name = "user.nkyriaco.JZ0.Ntuple_05_06_26_Prod1_EXT0"
+    jz1_rucio_name = "user.nkyriaco.JZ1.Ntuple_05_06_26_Prod1_EXT0"
+    jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_05_06_26_Prod1_EXT0"
+    jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_05_06_26_Prod1_EXT0"
+    jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_05_06_26_Prod1_EXT0"
 
-    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_04_10_26_Prod1_EXT0"
-    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_04_10_26_Prod1_EXT0"
+    tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_05_06_26_Prod1_EXT0"
+    ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_05_06_26_Prod1_EXT0"
 
     num_files = args.num_files
     jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
