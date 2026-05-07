@@ -122,7 +122,7 @@ TAUTRACK_CLASSIFICATION_BRANCHES = [
 ] # I will redefine the labels we feed into OMNI via the following # 0,8=Undefined; 1 = TTT; 2 = CT, 3,4 = IT (balled as 3), 5,6,7 = FT (balled as 4) 
 
 TAUVERTEX_CLASSIFICATION_BRANCHES = [
-    ("truth_tauVertex", "truth_tauVertex", False)
+    ("truth_tau_Vertex", "truth_tau_Vertex", False)
 ] # I will redefine the labels we feed into OMNI via the following # 0,8=Undefined; 1 = TTT; 2 = CT, 3,4 = IT (balled as 3), 5,6,7 = FT (balled as 4) 
 
 NUM_CLUSTER_FEATURES = len(CLUSTER_BRANCHES)
@@ -364,14 +364,14 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
     
     # Tau vertices targets - vector of vertices per jet, only for tau jets, else None to avoid large zero arrays
     chunk_tau_vertex_targets = _vectorized_point_cloud(events, TAUVERTEX_CLASSIFICATION_BRANCHES, MAX_VERTICES_PER_TAU).astype(np.int32) if label == 1 else None
-    chunk_num_vertices = ak.to_numpy(ak.num(events["truth_tauVertex"], axis=1)).astype(np.int32) if label == 1 else None
+    chunk_num_vertices = ak.to_numpy(ak.num(events["truth_tau_Vertex"], axis=1)).astype(np.int32) if label == 1 else None
     chunk_vertex_slot_mask = ( np.arange(MAX_VERTICES_PER_TAU)[None, :] < chunk_num_vertices[:, None] ).astype(np.bool_) if label == 1 else None # [N, MAX_VERTICES_PER_TAU] False for 0-padded vertex slots
     # Reco comparisons
     chunk_reco_id = _vectorized_scalar_targets_no_decorator(events, RECO_ID)
     chunk_reco_decay_mode = _vectorized_scalar_targets_no_decorator(events, DECAY_MODE[1:])
     chunk_reco_tau_4mom = _vectorized_scalar_targets_no_decorator(events, RECO_TAU_4MOM)
-    chuck_reco_charged_pions = _temp_obtain_reco_pions_sum(events, RECO_CHARGED_PION_4MOM, CHARGED_PION_MASS)
-    chuck_reco_neutral_pions = _temp_obtain_reco_pions_sum(events, RECO_NEUTRAL_PION_4MOM, NEUTRAL_PION_MASS)
+    chunk_reco_charged_pions = _temp_obtain_reco_pions_sum(events, RECO_CHARGED_PION_4MOM, CHARGED_PION_MASS)
+    chunk_reco_neutral_pions = _temp_obtain_reco_pions_sum(events, RECO_NEUTRAL_PION_4MOM, NEUTRAL_PION_MASS)
 
 
     # Tau Track targets - only for tau jets, else None to avoid large zero arrays
@@ -382,7 +382,7 @@ def _process_chunk(events, label, n_events_in_chunk, use_cells=True):
             chunk_tau_targets, chunk_charged_pion_targets, chunk_neutral_pion_targets,
             chunk_tau_track_targets, chunk_tau_vertex_targets, chunk_vertex_slot_mask,
             chunk_reco_id, chunk_reco_decay_mode, chunk_reco_tau_4mom,
-            chuck_reco_charged_pions, chuck_reco_neutral_pions)
+            chunk_reco_charged_pions, chunk_reco_neutral_pions)
 
 
 def process_file(filepath, label, chunk_size="250 MB", use_cells=True):
@@ -845,16 +845,26 @@ if __name__ == "__main__":
     jz2_rucio_name = "user.nkyriaco.JZ2.Ntuple_05_06_26_Prod1_EXT0"
     jz3_rucio_name = "user.nkyriaco.JZ3.Ntuple_05_06_26_Prod1_EXT0"
     jz4_rucio_name = "user.nkyriaco.JZ4.Ntuple_05_06_26_Prod1_EXT0"
+    jz5_rucio_name = "user.nkyriaco.JZ5.Ntuple_05_06_26_Prod1_EXT0"
+    jz6_rucio_name = "user.nkyriaco.JZ6.Ntuple_05_06_26_Prod1_EXT0"
+    jz7_rucio_name = "user.nkyriaco.JZ7.Ntuple_05_06_26_Prod1_EXT0"
+    jz8_rucio_name = "user.nkyriaco.JZ8.Ntuple_05_06_26_Prod1_EXT0"
+    jz9_rucio_name = "user.nkyriaco.JZ9incl.Ntuple_05_06_26_Prod1_EXT0"
 
     tautau_rucio_name = "user.nkyriaco.Gammatautau.Ntuple_05_06_26_Prod1_EXT0"
     ee_rucio_name = "user.nkyriaco.Gammaee.Ntuple_05_06_26_Prod1_EXT0"
 
     num_files = args.num_files
     jz0_files = _list_root_files(os.path.join(args.input_dir, jz0_rucio_name), num_files=num_files)
-    #jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
-    #jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
-    #jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
-    #jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
+    jz1_files = _list_root_files(os.path.join(args.input_dir, jz1_rucio_name), num_files=num_files)
+    jz2_files = _list_root_files(os.path.join(args.input_dir, jz2_rucio_name), num_files=num_files)
+    jz3_files = _list_root_files(os.path.join(args.input_dir, jz3_rucio_name), num_files=num_files)
+    jz4_files = _list_root_files(os.path.join(args.input_dir, jz4_rucio_name), num_files=num_files)
+    jz5_files = _list_root_files(os.path.join(args.input_dir, jz5_rucio_name), num_files=num_files)
+    jz6_files = _list_root_files(os.path.join(args.input_dir, jz6_rucio_name), num_files=num_files)
+    jz7_files = _list_root_files(os.path.join(args.input_dir, jz7_rucio_name), num_files=num_files)
+    jz8_files = _list_root_files(os.path.join(args.input_dir, jz8_rucio_name), num_files=num_files)
+    jz9_files = _list_root_files(os.path.join(args.input_dir, jz9_rucio_name), num_files=num_files)
 
     # Gammatautau files (label 1)
     gammatautau_files = _list_root_files(os.path.join(args.input_dir, tautau_rucio_name), 
@@ -871,28 +881,48 @@ if __name__ == "__main__":
         files_and_labels.append((os.path.join(args.input_dir, jz0_rucio_name, fname), 0))
 
     # Add JZ1 files with label 0
-    #for fname in jz1_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
+    for fname in jz1_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz1_rucio_name, fname), 0))
 
     # Add JZ2 files with label 0
-    #for fname in jz2_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
+    for fname in jz2_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz2_rucio_name, fname), 0))
 
     # Add JZ3 files with label 0
-    #for fname in jz3_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
+    for fname in jz3_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz3_rucio_name, fname), 0))
 
     # Add JZ4 files with label 0
-    #for fname in jz4_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
+    for fname in jz4_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz4_rucio_name, fname), 0))
+
+    # Add JZ5 files with label 0
+    for fname in jz5_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz5_rucio_name, fname), 0))
+
+    # Add JZ6 files with label 0
+    for fname in jz6_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz6_rucio_name, fname), 0))
+
+    # Add JZ7 files with label 0
+    for fname in jz7_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz7_rucio_name, fname), 0))
+
+    # Add JZ8 files with label 0
+    for fname in jz8_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz8_rucio_name, fname), 0))
+
+    # Add JZ9 files with label 0
+    for fname in jz9_files:
+        files_and_labels.append((os.path.join(args.input_dir, jz9_rucio_name, fname), 0))
 
     # Add Gammatautau files with label 1
-    #for fname in gammatautau_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
+    for fname in gammatautau_files:
+        files_and_labels.append((os.path.join(args.input_dir, tautau_rucio_name, fname), 1))
 
     # Add Gammaee files with label 2
-    #for fname in gammaee_files:
-    #    files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
+    for fname in gammaee_files:
+        files_and_labels.append((os.path.join(args.input_dir, ee_rucio_name, fname), 2))
 
     # Filter to existing files
     valid_files = [(fp, lb) for fp, lb in files_and_labels if os.path.exists(fp)]
